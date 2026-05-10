@@ -21,7 +21,7 @@ var asciiRegex = regexp.MustCompile(`^[\x20-\x7E]+$`)
 
 func newProcessingModel(input, output string, minLen, maxLen int, asciiOnly bool, isArchive bool) processingModel {
 	return processingModel{
-		pipeline: pipelineModel{
+		pipeline: &pipelineModel{
 			inputFile:  input,
 			outputFile: output,
 			minLen:     minLen,

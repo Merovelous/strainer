@@ -99,7 +99,7 @@ func (m appModelMain) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case pipeDoneMsg:
 		m.state = stateSummary
-		p := &m.processing.pipeline
+		p := m.processing.pipeline
 		m.summary = summaryModel{
 			inputFile:    m.inputFile,
 			outputFile:   m.outputFile,
@@ -118,7 +118,7 @@ func (m appModelMain) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case pipeErrMsg:
 		m.state = stateSummary
-		p := &m.processing.pipeline
+		p := m.processing.pipeline
 		m.summary = summaryModel{
 			inputFile:    m.inputFile,
 			outputFile:   m.outputFile,

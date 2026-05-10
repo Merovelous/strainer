@@ -153,7 +153,7 @@ type summaryModel struct {
 }
 
 type processingModel struct {
-	pipeline pipelineModel
+	pipeline *pipelineModel
 	metrics  metricsModel
 }
 
