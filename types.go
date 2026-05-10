@@ -165,7 +165,7 @@ type processingModel struct {
 type (
 	browserReadyMsg   struct{}
 	browserSelectMsg  struct{ path string; isArchive bool }
-	archiveReadyMsg   struct{}
+	archiveReadyMsg   struct{ entries []archiveEntry; err error }
 	archiveSelectMsg  struct{ file string }
 	filterReadyMsg    struct{}
 	pipeReadyMsg      struct{}

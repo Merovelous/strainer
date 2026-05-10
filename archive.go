@@ -16,49 +16,73 @@ func (ap archivePickerModel) loadEntries() tea.Cmd {
 	return func() tea.Msg {
 		out, err := runCommand("7z", "l", ap.archivePath)
 		if err != nil {
-			return archiveReadyMsg{}
+			return archiveReadyMsg{err: fmt.Errorf("7z l failed: %w\n%s", err, out)}
 		}
-		ap.entries = parse7zListing(out)
-		return archiveReadyMsg{}
+		entries := parse7zListing(out)
+		return archiveReadyMsg{entries: entries}
 	}
 }
 
 func parse7zListing(output string) []archiveEntry {
 	lines := strings.Split(output, "\n")
 
-	// Find the dash line separator (e.g., "------------------- -----")
-	dashIdx := -1
+	// Find the separator line: "---... ---..." (dashes with spaces)
+	sepIdx := -1
+	nameColStart := -1
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if len(trimmed) >= 15 && strings.Trim(trimmed, "-") == "" {
-			dashIdx = i
+		if len(trimmed) >= 15 && strings.Contains(trimmed, " ") && strings.Trim(trimmed, "- ") == "" {
+			sepIdx = i
 			break
 		}
+		// Find "Name" column position in header
+		if strings.Contains(trimmed, "Name") && strings.Contains(trimmed, "Size") {
+			nameColStart = strings.Index(line, "Name")
+		}
 	}
-	if dashIdx == -1 {
+	if sepIdx == -1 {
 		return nil
 	}
 
-	// Everything after the dash line is file listing
-	rest := strings.Join(lines[dashIdx+1:], "\n")
-	// Split by blank line to get entries
-	blocks := strings.Split(rest, "\n\n")
+	// Default: filename is last whitespace-delimited field
+	// But if we found the Name column position, use that for cleaner parsing
+	usePosition := nameColStart > 0
+
 	var entries []archiveEntry
-	for idx, block := range blocks {
-		block = strings.TrimSpace(block)
-		if block == "" {
+	for i := sepIdx + 1; i < len(lines); i++ {
+		line := lines[i]
+		trimmed := strings.TrimSpace(line)
+
+		if trimmed == "" {
 			continue
 		}
-		// Extract filename (last column after whitespace)
-		parts := strings.Fields(block)
-		if len(parts) < 6 {
-			continue
+
+		// Second dash line = end of file list
+		if len(trimmed) >= 15 && strings.Contains(trimmed, " ") && strings.Trim(trimmed, "- ") == "" {
+			break
 		}
-		name := parts[len(parts)-1]
+
+		// Summary line (contains "files," or "folders") = end
+		if strings.Contains(trimmed, "files,") || strings.Contains(trimmed, "folders") {
+			break
+		}
+
+		// Extract filename
+		var name string
+		if usePosition && len(line) > nameColStart {
+			name = strings.TrimSpace(line[nameColStart:])
+		} else {
+			fields := strings.Fields(trimmed)
+			if len(fields) < 5 {
+				continue
+			}
+			name = fields[len(fields)-1]
+		}
+
 		if name == "" {
 			continue
 		}
-		entries = append(entries, archiveEntry{name: name, index: idx})
+		entries = append(entries, archiveEntry{name: name, index: len(entries)})
 	}
 	return entries
 }
@@ -68,6 +92,8 @@ func (ap archivePickerModel) Update(msg tea.Msg) (archivePickerModel, tea.Cmd) {
 	case archiveReadyMsg:
 		ap.loading = false
 		ap.done = true
+		ap.entries = msg.entries
+		ap.err = msg.err
 		return ap, nil
 
 	case tea.KeyMsg:
@@ -104,7 +130,6 @@ func (ap archivePickerModel) Update(msg tea.Msg) (archivePickerModel, tea.Cmd) {
 }
 
 func (ap archivePickerModel) View(maxHeight int) string {
-	// Header
 	header := sHeader.Render("  📦 ARCHIVE CONTENTS")
 	archive := sDim.Render("  " + ap.archivePath)
 	lines := []string{"", header, archive, ""}
@@ -120,7 +145,8 @@ func (ap archivePickerModel) View(maxHeight int) string {
 	}
 
 	if len(ap.entries) == 0 {
-		lines = append(lines, sDim.Render("  (no files found in archive)"))
+		lines = append(lines, sWarning.Render("  (no files found in archive)"))
+		lines = append(lines, sDim.Render("  Archive may be empty or format unsupported"))
 		return strings.Join(lines, "\n")
 	}
 
