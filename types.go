@@ -101,18 +101,10 @@ type filterOption struct {
 
 type metricsModel struct {
 	status     pipeStatus
-	linesRead  int64
-	linesKept  int64
-	linesDropped int64
-	bytesRead  int64
-	bytesWritten int64
+	startTime  time.Time
 
 	// CPU
-	startCPU   float64
-	lastCPU    float64
-	lastCPUTime time.Time
 	cpuPct     float64
-	startTime  time.Time
 
 	// Memory
 	rssBytes   int64
@@ -120,8 +112,6 @@ type metricsModel struct {
 	// IO
 	ioReadBytes  int64
 	ioWriteBytes int64
-	startIORead  int64
-	startIOWrite int64
 }
 
 type pipelineModel struct {
@@ -133,12 +123,18 @@ type pipelineModel struct {
 	isArchive  bool
 
 	status   pipeStatus
-	metrics  metricsModel
 	startAt  time.Time
 	finishAt time.Time
 	err      error
 
 	ready bool // set true to trigger Start()
+
+	// Atomic counters — written by goroutines, read by TUI
+	linesRead     int64
+	linesKept     int64
+	linesDropped  int64
+	bytesRead     int64
+	bytesWritten  int64
 }
 
 type summaryModel struct {
@@ -169,7 +165,6 @@ type (
 	archiveSelectMsg  struct{ file string }
 	filterReadyMsg    struct{}
 	pipeReadyMsg      struct{}
-	pipeLineMsg       struct{ kept bool }
 	pipeDoneMsg       struct{}
 	pipeErrMsg        struct{ err error }
 	metricsTickMsg    struct{}

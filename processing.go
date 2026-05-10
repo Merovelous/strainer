@@ -49,25 +49,8 @@ func (pm processingModel) Update(msg tea.Msg, teaProgram *tea.Program) (processi
 	switch msg := msg.(type) {
 	case pipeReadyMsg:
 		if pm.pipeline.ready {
-			pm.pipeline.start(teaProgram)
+			pm.pipeline.start()
 		}
-		return pm, nil
-
-	case pipeLineMsg:
-		atomic.AddInt64(&pm.metrics.linesRead, 1)
-		if msg.kept {
-			atomic.AddInt64(&pm.metrics.linesKept, 1)
-		} else {
-			atomic.AddInt64(&pm.metrics.linesDropped, 1)
-		}
-		return pm, nil
-
-	case pipeBytesReadMsg:
-		atomic.AddInt64(&pm.metrics.bytesRead, msg.n)
-		return pm, nil
-
-	case pipeBytesWrittenMsg:
-		atomic.AddInt64(&pm.metrics.bytesWritten, msg.n)
 		return pm, nil
 
 	case pipeDoneMsg:
@@ -101,21 +84,17 @@ func (pm processingModel) Update(msg tea.Msg, teaProgram *tea.Program) (processi
 	return pm, nil
 }
 
-type (
-	pipeBytesReadMsg    struct{ n int64 }
-	pipeBytesWrittenMsg struct{ n int64 }
-)
-
 func (pm processingModel) View(width, maxHeight int) string {
 	header := sHeader.Render("  🔄 PROCESSING")
 	fileLine := sDim.Render("  Input: " + pm.pipeline.inputFile)
 	lines := []string{"", header, fileLine, ""}
 
-	lr := atomic.LoadInt64(&pm.metrics.linesRead)
-	lk := atomic.LoadInt64(&pm.metrics.linesKept)
-	ld := atomic.LoadInt64(&pm.metrics.linesDropped)
-	br := atomic.LoadInt64(&pm.metrics.bytesRead)
-	bw := atomic.LoadInt64(&pm.metrics.bytesWritten)
+	// Read atomic counters directly — no messages needed
+	lr := atomic.LoadInt64(&pm.pipeline.linesRead)
+	lk := atomic.LoadInt64(&pm.pipeline.linesKept)
+	ld := atomic.LoadInt64(&pm.pipeline.linesDropped)
+	br := atomic.LoadInt64(&pm.pipeline.bytesRead)
+	bw := atomic.LoadInt64(&pm.pipeline.bytesWritten)
 
 	elapsed := time.Since(pm.metrics.startTime)
 	var speed string
@@ -253,25 +232,27 @@ func formatDuration(d time.Duration) string {
 
 // --- Pipeline ---
 
-func (p *pipelineModel) start(teaProgram *tea.Program) {
+func (p *pipelineModel) start() {
 	p.status = pipeRunning
 
 	lineChan := make(chan string, 4096)
 	resultChan := make(chan filterResult, 4096)
 
-	// Reader goroutine
+	// Reader goroutine — pure atomic counters, no teaProgram.Send()
 	go func() {
 		var reader io.Reader
 		if p.isArchive {
 			cmd := exec.Command("7z", "x", p.inputFile, "-so", "-mmt=on")
 			stdout, err := cmd.StdoutPipe()
 			if err != nil {
-				teaProgram.Send(pipeErrMsg{err: err})
+				p.err = err
+				p.status = pipeError
 				close(lineChan)
 				return
 			}
 			if err := cmd.Start(); err != nil {
-				teaProgram.Send(pipeErrMsg{err: err})
+				p.err = err
+				p.status = pipeError
 				close(lineChan)
 				return
 			}
@@ -280,7 +261,8 @@ func (p *pipelineModel) start(teaProgram *tea.Program) {
 		} else {
 			f, err := os.Open(p.inputFile)
 			if err != nil {
-				teaProgram.Send(pipeErrMsg{err: err})
+				p.err = err
+				p.status = pipeError
 				close(lineChan)
 				return
 			}
@@ -288,7 +270,7 @@ func (p *pipelineModel) start(teaProgram *tea.Program) {
 			reader = f
 		}
 
-		cr := &countingReader{r: reader, teaProgram: teaProgram}
+		cr := &atomicCounterReader{r: reader, bytesRead: &p.bytesRead}
 		scanner := bufio.NewScanner(cr)
 		buf := make([]byte, 0, 64*1024)
 		scanner.Buffer(buf, 1024*1024)
@@ -299,7 +281,7 @@ func (p *pipelineModel) start(teaProgram *tea.Program) {
 		close(lineChan)
 	}()
 
-	// Filter workers with WaitGroup
+	// Filter workers
 	numWorkers := runtime.NumCPU()
 	if numWorkers < 2 {
 		numWorkers = 2
@@ -322,36 +304,37 @@ func (p *pipelineModel) start(teaProgram *tea.Program) {
 		close(resultChan)
 	}()
 
-	// Writer goroutine
+	// Writer goroutine — pure atomic counters, no teaProgram.Send()
 	go func() {
 		outFile, err := os.Create(p.outputFile)
 		if err != nil {
-			teaProgram.Send(pipeErrMsg{err: err})
+			p.err = err
+			p.status = pipeError
+			p.finishAt = time.Now()
 			return
 		}
 		defer outFile.Close()
 
 		writer := bufio.NewWriterSize(outFile, 256*1024)
-		var written int64
 
 		for result := range resultChan {
-			teaProgram.Send(pipeLineMsg{kept: result.kept})
+			atomic.AddInt64(&p.linesRead, 1)
 			if result.kept {
-				n, _ := writer.WriteString(result.line + "\n")
-				written += int64(n)
-				if written >= 64*1024 {
-					writer.Flush()
-					teaProgram.Send(pipeBytesWrittenMsg{n: written})
-					written = 0
-				}
+				atomic.AddInt64(&p.linesKept, 1)
+				writer.WriteString(result.line + "\n")
+			} else {
+				atomic.AddInt64(&p.linesDropped, 1)
 			}
 		}
-		if written > 0 {
-			writer.Flush()
-			teaProgram.Send(pipeBytesWrittenMsg{n: written})
-		}
 		writer.Flush()
-		teaProgram.Send(pipeDoneMsg{})
+
+		// Get final written bytes from file
+		if info, err := outFile.Stat(); err == nil {
+			atomic.StoreInt64(&p.bytesWritten, info.Size())
+		}
+
+		p.finishAt = time.Now()
+		p.status = pipeDone
 	}()
 }
 
@@ -373,17 +356,17 @@ func (p *pipelineModel) filterLine(line string) bool {
 	return true
 }
 
-// countingReader wraps an io.Reader and reports bytes read
-type countingReader struct {
-	r          io.Reader
-	teaProgram *tea.Program
-	totalBytes int64
+// atomicCounterReader wraps io.Reader, atomically counting bytes read
+type atomicCounterReader struct {
+	r         io.Reader
+	bytesRead *int64
 }
 
-func (cr *countingReader) Read(p []byte) (int, error) {
+func (cr *atomicCounterReader) Read(p []byte) (int, error) {
 	n, err := cr.r.Read(p)
-	cr.totalBytes += int64(n)
-	cr.teaProgram.Send(pipeBytesReadMsg{n: int64(n)})
+	if n > 0 {
+		atomic.AddInt64(cr.bytesRead, int64(n))
+	}
 	return n, err
 }
 

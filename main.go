@@ -99,15 +99,16 @@ func (m appModelMain) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case pipeDoneMsg:
 		m.state = stateSummary
+		p := &m.processing.pipeline
 		m.summary = summaryModel{
 			inputFile:    m.inputFile,
 			outputFile:   m.outputFile,
-			linesRead:    m.processing.metrics.linesRead,
-			linesKept:    m.processing.metrics.linesKept,
-			linesDropped: m.processing.metrics.linesDropped,
-			bytesRead:    m.processing.metrics.bytesRead,
-			bytesWritten: m.processing.metrics.bytesWritten,
-			elapsed:      m.processing.pipeline.finishAt.Sub(m.processing.pipeline.startAt),
+			linesRead:    p.linesRead,
+			linesKept:    p.linesKept,
+			linesDropped: p.linesDropped,
+			bytesRead:    p.bytesRead,
+			bytesWritten: p.bytesWritten,
+			elapsed:      p.finishAt.Sub(p.startAt),
 			minLen:       m.minLen,
 			maxLen:       m.maxLen,
 			asciiOnly:    m.asciiOnly,
@@ -117,15 +118,16 @@ func (m appModelMain) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case pipeErrMsg:
 		m.state = stateSummary
+		p := &m.processing.pipeline
 		m.summary = summaryModel{
 			inputFile:    m.inputFile,
 			outputFile:   m.outputFile,
-			linesRead:    m.processing.metrics.linesRead,
-			linesKept:    m.processing.metrics.linesKept,
-			linesDropped: m.processing.metrics.linesDropped,
-			bytesRead:    m.processing.metrics.bytesRead,
-			bytesWritten: m.processing.metrics.bytesWritten,
-			elapsed:      time.Since(m.processing.pipeline.startAt),
+			linesRead:    p.linesRead,
+			linesKept:    p.linesKept,
+			linesDropped: p.linesDropped,
+			bytesRead:    p.bytesRead,
+			bytesWritten: p.bytesWritten,
+			elapsed:      time.Since(p.startAt),
 			minLen:       m.minLen,
 			maxLen:       m.maxLen,
 			asciiOnly:    m.asciiOnly,
@@ -134,30 +136,6 @@ func (m appModelMain) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case metricsTickMsg:
-		if m.state == stateProcessing {
-			var cmd tea.Cmd
-			m.processing, cmd = m.processing.Update(msg, globalTeaProgram)
-			return m, cmd
-		}
-		return m, nil
-
-	case pipeLineMsg:
-		if m.state == stateProcessing {
-			var cmd tea.Cmd
-			m.processing, cmd = m.processing.Update(msg, globalTeaProgram)
-			return m, cmd
-		}
-		return m, nil
-
-	case pipeBytesReadMsg:
-		if m.state == stateProcessing {
-			var cmd tea.Cmd
-			m.processing, cmd = m.processing.Update(msg, globalTeaProgram)
-			return m, cmd
-		}
-		return m, nil
-
-	case pipeBytesWrittenMsg:
 		if m.state == stateProcessing {
 			var cmd tea.Cmd
 			m.processing, cmd = m.processing.Update(msg, globalTeaProgram)
