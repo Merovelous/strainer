@@ -117,6 +117,7 @@ type metricsModel struct {
 type pipelineModel struct {
 	inputFile  string
 	outputFile string
+	fileSize   int64 // source file size for progress
 	minLen     int
 	maxLen     int
 	asciiOnly  bool

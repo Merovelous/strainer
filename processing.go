@@ -19,10 +19,17 @@ import (
 var asciiRegex = regexp.MustCompile(`^[\x20-\x7E]+$`)
 
 func newProcessingModel(input, output string, minLen, maxLen int, asciiOnly bool, isArchive bool) processingModel {
+	// Get source file size for progress bar
+	var fileSize int64
+	if info, err := os.Stat(input); err == nil {
+		fileSize = info.Size()
+	}
+
 	return processingModel{
 		pipeline: &pipelineModel{
 			inputFile:  input,
 			outputFile: output,
+			fileSize:   fileSize,
 			minLen:     minLen,
 			maxLen:     maxLen,
 			asciiOnly:  asciiOnly,
@@ -143,7 +150,7 @@ func (pm processingModel) View(width, maxHeight int) string {
 	lines = append(lines, panelBox)
 
 	lines = append(lines, "")
-	bar := renderProgressBar(width-6, pm.pipeline.status == pipeRunning)
+	bar := renderProgressBar(width-6, pm.pipeline.status == pipeRunning, br, pm.pipeline.fileSize)
 	lines = append(lines, "  "+bar)
 
 	lines = append(lines, "")
@@ -171,24 +178,46 @@ func (pm processingModel) View(width, maxHeight int) string {
 	return strings.Join(lines, "\n")
 }
 
-func renderProgressBar(width int, running bool) string {
+func renderProgressBar(width int, running bool, bytesRead, fileSize int64) string {
 	if width < 10 {
 		width = 10
 	}
-	if running {
-		filled := width / 2
-		bar := ""
-		for i := 0; i < width; i++ {
-			if i < filled {
-				idx := i % len(gradientBar)
-				bar += sCyan.Render(gradientBar[idx])
-			} else {
-				bar += sDimmer.Render("░")
-			}
+
+	// Calculate progress percentage
+	var pct float64
+	if fileSize > 0 {
+		pct = float64(bytesRead) / float64(fileSize)
+		if pct > 1.0 {
+			pct = 1.0
 		}
-		return bar
 	}
-	return sCyan.Render(strings.Repeat("█", width))
+
+	if !running && pct >= 1.0 {
+		// Complete — solid bar
+		return sCyan.Render(strings.Repeat("█", width))
+	}
+
+	if !running {
+		return sDimmer.Render(strings.Repeat("░", width))
+	}
+
+	// Running — show progress
+	filled := int(pct * float64(width))
+	if filled > width {
+		filled = width
+	}
+
+	bar := sCyan.Render(strings.Repeat("█", filled))
+	remainder := width - filled
+	if remainder > 0 {
+		bar += sDimmer.Render(strings.Repeat("░", remainder))
+	}
+
+	// Append percentage
+	pctStr := fmt.Sprintf(" %.1f%%", pct*100)
+	bar += sDim.Render(pctStr)
+
+	return bar
 }
 
 func humanSpeed(bytesPerSec float64) string {
