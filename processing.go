@@ -150,7 +150,7 @@ func (pm processingModel) View(width, maxHeight int) string {
 	lines = append(lines, panelBox)
 
 	lines = append(lines, "")
-	bar := renderProgressBar(width-6, pm.pipeline.status == pipeRunning, br, pm.pipeline.fileSize)
+	bar := renderProgressBar(width-6, pm.pipeline.status == pipeRunning, br, pm.pipeline.fileSize, pm.pipeline.isArchive)
 	lines = append(lines, "  "+bar)
 
 	lines = append(lines, "")
@@ -178,14 +178,14 @@ func (pm processingModel) View(width, maxHeight int) string {
 	return strings.Join(lines, "\n")
 }
 
-func renderProgressBar(width int, running bool, bytesRead, fileSize int64) string {
+func renderProgressBar(width int, running bool, bytesRead, fileSize int64, isArchive bool) string {
 	if width < 10 {
 		width = 10
 	}
 
-	// Calculate progress percentage
+	// Calculate progress percentage (only for plain files, not archives)
 	var pct float64
-	if fileSize > 0 {
+	if fileSize > 0 && !isArchive {
 		pct = float64(bytesRead) / float64(fileSize)
 		if pct > 1.0 {
 			pct = 1.0
@@ -201,7 +201,23 @@ func renderProgressBar(width int, running bool, bytesRead, fileSize int64) strin
 		return sDimmer.Render(strings.Repeat("░", width))
 	}
 
-	// Running — show progress
+	// Archive: indeterminate pulsing bar
+	if isArchive {
+		half := width / 2
+		bar := ""
+		for i := 0; i < width; i++ {
+			if i < half {
+				idx := i % len(gradientBar)
+				bar += sCyan.Render(gradientBar[idx])
+			} else {
+				bar += sDimmer.Render("░")
+			}
+		}
+		bar += sDim.Render(fmt.Sprintf(" %s read", humanSize(bytesRead)))
+		return bar
+	}
+
+	// Plain file: determinate progress
 	filled := int(pct * float64(width))
 	if filled > width {
 		filled = width
