@@ -10,7 +10,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -89,7 +88,6 @@ func (pm processingModel) View(width, maxHeight int) string {
 	fileLine := sDim.Render("  Input: " + pm.pipeline.inputFile)
 	lines := []string{"", header, fileLine, ""}
 
-	// Read atomic counters directly — no messages needed
 	lr := atomic.LoadInt64(&pm.pipeline.linesRead)
 	lk := atomic.LoadInt64(&pm.pipeline.linesKept)
 	ld := atomic.LoadInt64(&pm.pipeline.linesDropped)
@@ -235,10 +233,6 @@ func formatDuration(d time.Duration) string {
 func (p *pipelineModel) start() {
 	p.status = pipeRunning
 
-	lineChan := make(chan string, 4096)
-	resultChan := make(chan filterResult, 4096)
-
-	// Reader goroutine — pure atomic counters, no teaProgram.Send()
 	go func() {
 		var reader io.Reader
 		if p.isArchive {
@@ -247,13 +241,13 @@ func (p *pipelineModel) start() {
 			if err != nil {
 				p.err = err
 				p.status = pipeError
-				close(lineChan)
+				p.finishAt = time.Now()
 				return
 			}
 			if err := cmd.Start(); err != nil {
 				p.err = err
 				p.status = pipeError
-				close(lineChan)
+				p.finishAt = time.Now()
 				return
 			}
 			reader = stdout
@@ -263,7 +257,7 @@ func (p *pipelineModel) start() {
 			if err != nil {
 				p.err = err
 				p.status = pipeError
-				close(lineChan)
+				p.finishAt = time.Now()
 				return
 			}
 			defer f.Close()
@@ -271,41 +265,7 @@ func (p *pipelineModel) start() {
 		}
 
 		cr := &atomicCounterReader{r: reader, bytesRead: &p.bytesRead}
-		scanner := bufio.NewScanner(cr)
-		buf := make([]byte, 0, 64*1024)
-		scanner.Buffer(buf, 1024*1024)
 
-		for scanner.Scan() {
-			lineChan <- scanner.Text()
-		}
-		close(lineChan)
-	}()
-
-	// Filter workers
-	numWorkers := runtime.NumCPU()
-	if numWorkers < 2 {
-		numWorkers = 2
-	}
-	var wg sync.WaitGroup
-	for i := 0; i < numWorkers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for line := range lineChan {
-				kept := p.filterLine(line)
-				resultChan <- filterResult{line: line, kept: kept}
-			}
-		}()
-	}
-
-	// Close resultChan when all workers done
-	go func() {
-		wg.Wait()
-		close(resultChan)
-	}()
-
-	// Writer goroutine — pure atomic counters, no teaProgram.Send()
-	go func() {
 		outFile, err := os.Create(p.outputFile)
 		if err != nil {
 			p.err = err
@@ -317,18 +277,25 @@ func (p *pipelineModel) start() {
 
 		writer := bufio.NewWriterSize(outFile, 256*1024)
 
-		for result := range resultChan {
-			atomic.AddInt64(&p.linesRead, 1)
-			if result.kept {
-				atomic.AddInt64(&p.linesKept, 1)
-				writer.WriteString(result.line + "\n")
-			} else {
-				atomic.AddInt64(&p.linesDropped, 1)
-			}
-		}
-		writer.Flush()
+		scanner := bufio.NewScanner(cr)
+		buf := make([]byte, 0, 64*1024)
+		scanner.Buffer(buf, 1024*1024)
 
-		// Get final written bytes from file
+		for scanner.Scan() {
+			atomic.AddInt64(&p.linesRead, 1)
+			line := scanner.Bytes()
+
+			if !p.filterLine(line) {
+				atomic.AddInt64(&p.linesDropped, 1)
+				continue
+			}
+
+			atomic.AddInt64(&p.linesKept, 1)
+			writer.Write(line)
+			writer.WriteByte('\n')
+		}
+
+		writer.Flush()
 		if info, err := outFile.Stat(); err == nil {
 			atomic.StoreInt64(&p.bytesWritten, info.Size())
 		}
@@ -338,20 +305,21 @@ func (p *pipelineModel) start() {
 	}()
 }
 
-type filterResult struct {
-	line string
-	kept bool
-}
-
-func (p *pipelineModel) filterLine(line string) bool {
-	if p.minLen > 0 && len(line) < p.minLen {
+// filterLine works on []byte directly — no string allocation
+func (p *pipelineModel) filterLine(line []byte) bool {
+	ll := len(line)
+	if p.minLen > 0 && ll < p.minLen {
 		return false
 	}
-	if p.maxLen > 0 && len(line) > p.maxLen {
+	if p.maxLen > 0 && ll > p.maxLen {
 		return false
 	}
-	if p.asciiOnly && !asciiRegex.MatchString(line) {
-		return false
+	if p.asciiOnly {
+		for _, b := range line {
+			if b < 0x20 || b > 0x7E {
+				return false
+			}
+		}
 	}
 	return true
 }
