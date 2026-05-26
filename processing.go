@@ -452,8 +452,8 @@ func (p *pipelineModel) start() {
 func (p *pipelineModel) runSingleCore(reader io.Reader, writer *bufio.Writer) error {
 	cr := &atomicCounterReader{r: reader, bytesRead: &p.bytesRead}
 	scanner := bufio.NewScanner(cr)
-	buf := make([]byte, 0, 64*1024)
-	scanner.Buffer(buf, 1024*1024)
+	buf := make([]byte, 0, 4*1024*1024)
+	scanner.Buffer(buf, 4*1024*1024)
 
 	for scanner.Scan() {
 		select {
