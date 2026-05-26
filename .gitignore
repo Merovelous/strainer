@@ -1,4 +1,4 @@
-strainer
-wordlist-forge
+/strainer
+/wordlist-forge
 *.txt
 !README.md
