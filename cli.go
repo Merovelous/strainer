@@ -70,22 +70,12 @@ func runCLI(f cliFlags) int {
 	}
 
 	var bloomBytes int64
-	switch f.bloomSize {
-	case "256m", "256M":
-		bloomBytes = 256 << 20
-	case "512m", "512M":
-		bloomBytes = 512 << 20
-	case "1g", "1G":
-		bloomBytes = 1 << 30
-	case "4g", "4G":
-		bloomBytes = 4 << 30
-	case "8g", "8G":
-		bloomBytes = 8 << 30
-	case "":
-		// no bloom filter
-	default:
-		fmt.Fprintf(os.Stderr, "error: invalid --bloom-size %q (use 256m, 512m, 1g, 4g, 8g)\n", f.bloomSize)
-		return 1
+	if f.bloomSize != "" {
+		bloomBytes = parseBloomSize(f.bloomSize)
+		if bloomBytes == 0 {
+			fmt.Fprintf(os.Stderr, "error: invalid --bloom-size %q (use a number followed by m or g, e.g. 1g, 16g, 2048m)\n", f.bloomSize)
+			return 1
+		}
 	}
 
 	var fileSize int64

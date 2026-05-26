@@ -23,7 +23,7 @@ func newFilterModel(fileName string, fileSize int64) filterModel {
 			{name: "ASCII Only"},
 			{name: "Regex Match", strDynamic: true},
 			{name: "Deduplicate"},
-			{name: "Bloom Filter Size", cycle: true, choices: []string{"Off", "256 MB", "512 MB", "1 GB", "4 GB", "8 GB"}},
+			{name: "Bloom Filter Size", cycle: true, choices: []string{"Off", "256 MB", "512 MB", "1 GB", "4 GB", "8 GB", "Custom"}},
 		},
 	}
 }
@@ -70,10 +70,36 @@ func (f filterModel) isDeduplicate() bool {
 
 func (f filterModel) getBloomSize() int64 {
 	opt := f.options[5]
-	if opt.choiceIdx <= 0 || opt.choiceIdx >= len(bloomPresets) {
+	if opt.choiceIdx == 0 {
 		return 0
 	}
-	return bloomPresets[opt.choiceIdx]
+	customIdx := len(opt.choices) - 1
+	if opt.choiceIdx == customIdx {
+		return parseBloomSize(opt.strValue)
+	}
+	if opt.choiceIdx < len(bloomPresets) {
+		return bloomPresets[opt.choiceIdx]
+	}
+	return 0
+}
+
+// parseBloomSize parses human size strings like "16g", "2048m" into bytes.
+func parseBloomSize(s string) int64 {
+	s = strings.TrimSpace(strings.ToLower(s))
+	if len(s) < 2 {
+		return 0
+	}
+	n, err := strconv.ParseInt(s[:len(s)-1], 10, 64)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	switch s[len(s)-1] {
+	case 'g':
+		return n << 30
+	case 'm':
+		return n << 20
+	}
+	return 0
 }
 
 func (f filterModel) buildOutputName(inputPath string) string {
@@ -151,7 +177,13 @@ func (f filterModel) Update(msg tea.Msg) (filterModel, tea.Cmd) {
 			opt := &f.options[f.cursor]
 			switch {
 			case opt.cycle:
-				if len(opt.choices) > 0 {
+				customIdx := len(opt.choices) - 1
+				if msg.String() == "enter" && opt.choiceIdx == customIdx {
+					// Enter on Custom → open text input
+					f.inputing = true
+					f.inputIdx = f.cursor
+					f.inputBuf = opt.strValue
+				} else {
 					opt.choiceIdx = (opt.choiceIdx + 1) % len(opt.choices)
 				}
 			case opt.strDynamic && !opt.enabled:
@@ -178,7 +210,11 @@ func (f filterModel) Update(msg tea.Msg) (filterModel, tea.Cmd) {
 				return f, nil
 			}
 			opt := &f.options[f.cursor]
-			if opt.strDynamic && opt.enabled {
+			if opt.cycle && opt.choiceIdx == len(opt.choices)-1 {
+				f.inputing = true
+				f.inputIdx = f.cursor
+				f.inputBuf = opt.strValue
+			} else if opt.strDynamic && opt.enabled {
 				f.inputing = true
 				f.inputIdx = f.cursor
 				f.inputBuf = opt.strValue
@@ -210,8 +246,24 @@ func (f filterModel) confirm() (filterModel, tea.Cmd) {
 func (f filterModel) handleInput(msg tea.KeyMsg) (filterModel, tea.Cmd) {
 	opt := &f.options[f.inputIdx]
 	isStr := opt.strDynamic
+	isCycle := opt.cycle
 	switch msg.String() {
 	case "enter":
+		if isCycle {
+			if f.inputBuf == "" {
+				opt.strValue = ""
+				opt.choiceIdx = 0 // revert to Off on empty input
+			} else if parseBloomSize(f.inputBuf) > 0 {
+				opt.strValue = f.inputBuf
+				f.validationErr = ""
+			} else {
+				f.validationErr = "invalid size — use a number followed by m or g  (e.g. 16g, 2048m)"
+				return f, nil
+			}
+			f.inputing = false
+			f.inputBuf = ""
+			return f, nil
+		}
 		if isStr {
 			if f.inputBuf != "" {
 				if _, err := regexp.Compile(f.inputBuf); err != nil {
@@ -238,7 +290,12 @@ func (f filterModel) handleInput(msg tea.KeyMsg) (filterModel, tea.Cmd) {
 	case "esc":
 		f.inputing = false
 		f.inputBuf = ""
-		if isStr {
+		f.validationErr = ""
+		if isCycle {
+			if opt.strValue == "" {
+				opt.choiceIdx = 0 // revert to Off if nothing was saved
+			}
+		} else if isStr {
 			if opt.strValue == "" {
 				opt.enabled = false
 			}
@@ -254,7 +311,12 @@ func (f filterModel) handleInput(msg tea.KeyMsg) (filterModel, tea.Cmd) {
 	default:
 		ch := msg.String()
 		if len(ch) == 1 {
-			if isStr {
+			if isCycle {
+				// Accept digits and unit suffixes only
+				if (ch >= "0" && ch <= "9") || ch == "g" || ch == "G" || ch == "m" || ch == "M" {
+					f.inputBuf += ch
+				}
+			} else if isStr {
 				if ch[0] >= 32 && ch[0] < 127 {
 					f.inputBuf += ch
 				}
@@ -342,17 +404,32 @@ func (f filterModel) View(width, maxHeight int) string {
 				valStr = sDim.Render(" [press Enter to set]")
 			}
 		} else if opt.cycle {
+			customIdx := len(opt.choices) - 1
+			isCustom := opt.choiceIdx == customIdx
 			choice := ""
 			if opt.choiceIdx < len(opt.choices) {
 				choice = opt.choices[opt.choiceIdx]
 			}
-			arrowStr := fmt.Sprintf(" [← %s →]", choice)
 			if !f.isDeduplicate() {
-				valStr = sDim.Render(arrowStr + "  (enable Deduplicate first)")
+				valStr = sDim.Render(fmt.Sprintf(" [← %s →]", choice) + "  (enable Deduplicate first)")
+			} else if isCustom {
+				if f.inputing && f.inputIdx == i {
+					valStr = sValue.Render(fmt.Sprintf(" [← %s█ →]", f.inputBuf))
+				} else if opt.strValue != "" {
+					parsed := parseBloomSize(opt.strValue)
+					arrowStr := fmt.Sprintf(" [← %s →]", opt.strValue)
+					if parsed > 0 {
+						valStr = sValue.Render(arrowStr) + f.bloomAnnotation(parsed)
+					} else {
+						valStr = sError.Render(arrowStr + " (invalid — e.g. 16g, 2048m)")
+					}
+				} else {
+					valStr = sValue.Render(" [← Custom →]") + sDim.Render("  press Enter to input size")
+				}
 			} else if opt.choiceIdx > 0 && opt.choiceIdx < len(bloomPresets) {
-				valStr = sValue.Render(arrowStr) + f.bloomAnnotation(bloomPresets[opt.choiceIdx])
+				valStr = sValue.Render(fmt.Sprintf(" [← %s →]", choice)) + f.bloomAnnotation(bloomPresets[opt.choiceIdx])
 			} else {
-				valStr = sDim.Render(arrowStr)
+				valStr = sDim.Render(fmt.Sprintf(" [← %s →]", choice))
 			}
 		}
 

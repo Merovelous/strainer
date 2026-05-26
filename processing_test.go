@@ -445,6 +445,26 @@ func TestBloomDedup(t *testing.T) {
 	}
 }
 
+func TestParseBloomSize(t *testing.T) {
+	tests := []struct{ input string; want int64 }{
+		{"1g", 1 << 30},
+		{"1G", 1 << 30},
+		{"16g", 16 << 30},
+		{"256m", 256 << 20},
+		{"2048m", 2048 << 20},
+		{"0g", 0},
+		{"", 0},
+		{"abc", 0},
+		{"16", 0},
+		{"g", 0},
+	}
+	for _, tt := range tests {
+		if got := parseBloomSize(tt.input); got != tt.want {
+			t.Errorf("parseBloomSize(%q) = %d, want %d", tt.input, got, tt.want)
+		}
+	}
+}
+
 // Ensure humanSize is accessible — it's defined in summary.go / processing.go.
 // This compile-time check confirms the test file is in the right package.
 var _ = humanSize
