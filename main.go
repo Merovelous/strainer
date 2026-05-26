@@ -112,7 +112,7 @@ func (m appModelMain) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.asciiOnly = m.filters.isASCIIOnly()
 
 		m.state = stateProcessing
-		pm := newProcessingModel(m.inputFile, outputName, m.minLen, m.maxLen, m.asciiOnly, m.isArchive)
+		pm := newProcessingModel(m.inputFile, m.selectedArchiveFile, outputName, m.minLen, m.maxLen, m.asciiOnly, m.isArchive)
 		m.processing = pm
 		return m, m.processing.Init()
 

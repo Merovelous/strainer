@@ -109,20 +109,25 @@ type metricsModel struct {
 }
 
 type pipelineModel struct {
-	inputFile  string
-	outputFile string
-	fileSize   int64 // source file size for progress
-	minLen     int
-	maxLen     int
-	asciiOnly  bool
-	isArchive  bool
+	inputFile           string
+	selectedArchiveFile string
+	outputFile          string
+	fileSize            int64
+	minLen              int
+	maxLen              int
+	asciiOnly           bool
+	isArchive           bool
 
+	// done is closed by the goroutine when it finishes (success or error).
+	// err and finishAt are written before close(done), so reading them after
+	// observing the closed channel is safe without additional synchronization.
+	done     chan struct{}
 	status   pipeStatus
 	startAt  time.Time
 	finishAt time.Time
 	err      error
 
-	ready bool // set true to trigger Start()
+	ready bool
 
 	// Atomic counters — written by goroutines, read by TUI
 	linesRead     int64

@@ -15,8 +15,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func newProcessingModel(input, output string, minLen, maxLen int, asciiOnly bool, isArchive bool) processingModel {
-	// Get source file size for progress bar
+func newProcessingModel(input, selectedArchiveFile, output string, minLen, maxLen int, asciiOnly bool, isArchive bool) processingModel {
 	var fileSize int64
 	if info, err := os.Stat(input); err == nil {
 		fileSize = info.Size()
@@ -24,14 +23,16 @@ func newProcessingModel(input, output string, minLen, maxLen int, asciiOnly bool
 
 	return processingModel{
 		pipeline: &pipelineModel{
-			inputFile:  input,
-			outputFile: output,
-			fileSize:   fileSize,
-			minLen:     minLen,
-			maxLen:     maxLen,
-			asciiOnly:  asciiOnly,
-			isArchive:  isArchive,
-			ready:      true,
+			inputFile:           input,
+			selectedArchiveFile: selectedArchiveFile,
+			outputFile:          output,
+			fileSize:            fileSize,
+			minLen:              minLen,
+			maxLen:              maxLen,
+			asciiOnly:           asciiOnly,
+			isArchive:           isArchive,
+			done:                make(chan struct{}),
+			ready:               true,
 		},
 		metrics: metricsModel{
 			startTime: time.Now(),
@@ -49,7 +50,7 @@ func (pm processingModel) Init() tea.Cmd {
 }
 
 func (pm processingModel) Update(msg tea.Msg, teaProgram *tea.Program) (processingModel, tea.Cmd) {
-	switch msg := msg.(type) {
+	switch msg.(type) {
 	case pipeReadyMsg:
 		if pm.pipeline.ready {
 			pm.pipeline.start()
@@ -58,18 +59,26 @@ func (pm processingModel) Update(msg tea.Msg, teaProgram *tea.Program) (processi
 
 	case pipeDoneMsg:
 		pm.pipeline.status = pipeDone
-		pm.pipeline.finishAt = time.Now()
 		return pm, nil
 
 	case pipeErrMsg:
 		pm.pipeline.status = pipeError
-		pm.pipeline.err = msg.err
-		pm.pipeline.finishAt = time.Now()
 		return pm, nil
 
 	case metricsTickMsg:
-		switch pm.pipeline.status {
-		case pipeRunning:
+		// Check completion via channel — avoids racing on the status field.
+		// err and finishAt are written by the goroutine before close(done),
+		// so they are safe to read here after observing the closed channel.
+		select {
+		case <-pm.pipeline.done:
+			if pm.pipeline.err != nil {
+				err := pm.pipeline.err
+				return pm, func() tea.Msg { return pipeErrMsg{err: err} }
+			}
+			return pm, func() tea.Msg { return pipeDoneMsg{} }
+		default:
+		}
+		if pm.pipeline.status == pipeRunning {
 			now := time.Now()
 			ticks := getCPURawTicks()
 			if !pm.metrics.prevCPUTime.IsZero() {
@@ -83,24 +92,10 @@ func (pm processingModel) Update(msg tea.Msg, teaProgram *tea.Program) (processi
 			pm.metrics.prevCPUTime = now
 			pm.metrics.rssBytes = getRSSBytes()
 			pm.metrics.ioReadBytes, pm.metrics.ioWriteBytes = getIOBytes()
-			return pm, tea.Every(100*time.Millisecond, func(t time.Time) tea.Msg {
-				return metricsTickMsg{}
-			})
-		case pipeDone:
-			if pm.pipeline.err != nil {
-				err := pm.pipeline.err
-				return pm, func() tea.Msg { return pipeErrMsg{err: err} }
-			}
-			return pm, func() tea.Msg { return pipeDoneMsg{} }
-		case pipeError:
-			err := pm.pipeline.err
-			return pm, func() tea.Msg { return pipeErrMsg{err: err} }
-		default:
-			// pipeIdle — pipeline not yet started, keep ticking
-			return pm, tea.Every(100*time.Millisecond, func(t time.Time) tea.Msg {
-				return metricsTickMsg{}
-			})
 		}
+		return pm, tea.Every(100*time.Millisecond, func(t time.Time) tea.Msg {
+			return metricsTickMsg{}
+		})
 	}
 	return pm, nil
 }
@@ -330,20 +325,27 @@ func (p *pipelineModel) start() {
 	p.status = pipeRunning
 
 	go func() {
+		var runErr error
+		defer func() {
+			p.err = runErr
+			p.finishAt = time.Now()
+			close(p.done)
+		}()
+
 		var reader io.Reader
 		if p.isArchive {
-			cmd := exec.Command("7z", "x", p.inputFile, "-so", "-mmt=on")
+			args := []string{"x", p.inputFile, "-so", "-mmt=on"}
+			if p.selectedArchiveFile != "" {
+				args = append(args, p.selectedArchiveFile)
+			}
+			cmd := exec.Command("7z", args...)
 			stdout, err := cmd.StdoutPipe()
 			if err != nil {
-				p.err = err
-				p.status = pipeError
-				p.finishAt = time.Now()
+				runErr = err
 				return
 			}
 			if err := cmd.Start(); err != nil {
-				p.err = err
-				p.status = pipeError
-				p.finishAt = time.Now()
+				runErr = err
 				return
 			}
 			reader = stdout
@@ -351,9 +353,7 @@ func (p *pipelineModel) start() {
 		} else {
 			f, err := os.Open(p.inputFile)
 			if err != nil {
-				p.err = err
-				p.status = pipeError
-				p.finishAt = time.Now()
+				runErr = err
 				return
 			}
 			defer f.Close()
@@ -364,15 +364,12 @@ func (p *pipelineModel) start() {
 
 		outFile, err := os.OpenFile(p.outputFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 		if err != nil {
-			p.err = err
-			p.status = pipeError
-			p.finishAt = time.Now()
+			runErr = err
 			return
 		}
 		defer outFile.Close()
 
 		writer := bufio.NewWriterSize(outFile, 256*1024)
-
 		scanner := bufio.NewScanner(cr)
 		buf := make([]byte, 0, 64*1024)
 		scanner.Buffer(buf, 1024*1024)
@@ -380,12 +377,10 @@ func (p *pipelineModel) start() {
 		for scanner.Scan() {
 			atomic.AddInt64(&p.linesRead, 1)
 			line := scanner.Bytes()
-
 			if !p.filterLine(line) {
 				atomic.AddInt64(&p.linesDropped, 1)
 				continue
 			}
-
 			atomic.AddInt64(&p.linesKept, 1)
 			writer.Write(line)
 			writer.WriteByte('\n')
@@ -393,15 +388,11 @@ func (p *pipelineModel) start() {
 		}
 
 		if err := scanner.Err(); err != nil {
-			p.err = err
-			p.finishAt = time.Now()
-			p.status = pipeError
+			runErr = err
 			return
 		}
 
 		writer.Flush()
-		p.finishAt = time.Now()
-		p.status = pipeDone
 	}()
 }
 
