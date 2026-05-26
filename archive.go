@@ -110,7 +110,10 @@ func (ap archivePickerModel) Update(msg tea.Msg) (archivePickerModel, tea.Cmd) {
 		case "down", "j":
 			if len(ap.entries) > 0 {
 				ap.cursor = (ap.cursor + 1) % len(ap.entries)
-				visible := 20
+				visible := ap.windowHeight - 11
+				if visible < 5 {
+					visible = 5
+				}
 				if ap.cursor == 0 {
 					ap.offset = 0
 				} else if ap.cursor >= ap.offset+visible {
@@ -156,7 +159,7 @@ func (ap archivePickerModel) View(maxHeight int) string {
 	}
 
 	// Entries
-	visible := maxHeight - 8
+	visible := maxHeight - 6
 	if visible < 5 {
 		visible = 5
 	}

@@ -99,9 +99,9 @@ func (b browserModel) Update(msg tea.Msg) (browserModel, tea.Cmd) {
 		case "down", "j":
 			if len(b.entries) > 0 {
 				b.cursor = (b.cursor + 1) % len(b.entries)
-				visible := b.windowHeight - 9
+				visible := b.windowHeight - 11
 				if visible < 5 {
-					visible = 20
+					visible = 5
 				}
 				if b.cursor == 0 {
 					b.offset = 0

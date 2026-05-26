@@ -33,6 +33,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.browser.windowHeight = msg.Height
+		m.archivePicker.windowHeight = msg.Height
 		return m, nil
 
 	case tea.KeyMsg:

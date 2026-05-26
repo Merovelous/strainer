@@ -72,12 +72,13 @@ type entry struct {
 }
 
 type archivePickerModel struct {
-	entries     []archiveEntry
-	cursor      int
-	offset      int
-	archivePath string
-	loading     bool
-	err         error
+	entries      []archiveEntry
+	cursor       int
+	offset       int
+	archivePath  string
+	loading      bool
+	err          error
+	windowHeight int
 }
 
 type archiveEntry struct {
