@@ -50,12 +50,13 @@ type appModel struct {
 }
 
 type browserModel struct {
-	entries    []entry
-	cursor     int
-	offset     int
-	currentDir string
-	err        error
-	ready      bool
+	entries      []entry
+	cursor       int
+	offset       int
+	currentDir   string
+	err          error
+	ready        bool
+	windowHeight int
 }
 
 type entry struct {
@@ -103,6 +104,8 @@ type metricsModel struct {
 	rssBytes     int64
 	ioReadBytes  int64
 	ioWriteBytes int64
+	prevCPUTicks float64
+	prevCPUTime  time.Time
 }
 
 type pipelineModel struct {

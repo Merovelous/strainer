@@ -70,7 +70,17 @@ func (pm processingModel) Update(msg tea.Msg, teaProgram *tea.Program) (processi
 	case metricsTickMsg:
 		switch pm.pipeline.status {
 		case pipeRunning:
-			pm.metrics.cpuPct = getCPUTimePercent()
+			now := time.Now()
+			ticks := getCPURawTicks()
+			if !pm.metrics.prevCPUTime.IsZero() {
+				elapsed := now.Sub(pm.metrics.prevCPUTime).Seconds()
+				if elapsed > 0 {
+					delta := ticks - pm.metrics.prevCPUTicks
+					pm.metrics.cpuPct = (delta / 100.0 / elapsed / float64(runtime.NumCPU())) * 100.0
+				}
+			}
+			pm.metrics.prevCPUTicks = ticks
+			pm.metrics.prevCPUTime = now
 			pm.metrics.rssBytes = getRSSBytes()
 			pm.metrics.ioReadBytes, pm.metrics.ioWriteBytes = getIOBytes()
 			return pm, tea.Every(100*time.Millisecond, func(t time.Time) tea.Msg {
@@ -107,10 +117,17 @@ func (pm processingModel) View(width, maxHeight int) string {
 	bw := atomic.LoadInt64(&pm.pipeline.bytesWritten)
 
 	elapsed := time.Since(pm.metrics.startTime)
+	var bytesPerSec float64
 	var speed string
 	if elapsed.Seconds() > 0 {
-		bytesPerSec := float64(br) / elapsed.Seconds()
+		bytesPerSec = float64(br) / elapsed.Seconds()
 		speed = humanSpeed(bytesPerSec)
+	}
+
+	var linesPerSec string
+	if elapsed.Seconds() > 0 {
+		lps := float64(lr) / elapsed.Seconds()
+		linesPerSec = fmt.Sprintf("%.0f lines/s", lps)
 	}
 
 	var statusStr string
@@ -129,26 +146,49 @@ func (pm processingModel) View(width, maxHeight int) string {
 		statusStr = sDim.Render("○ IDLE")
 	}
 
-	panel := fmt.Sprintf("  %s", statusStr)
-	panel += fmt.Sprintf("\n  Lines: %s read  %s kept  %s dropped",
-		sValue.Render(commaFmt(lr)),
-		sSuccess.Render(commaFmt(lk)),
-		sError.Render(commaFmt(ld)))
-	panel += fmt.Sprintf("\n  Read: %s  Written: %s  Speed: %s",
+	// Progress % and ETA (plain files only)
+	var pctStr, etaStr string
+	if pm.pipeline.fileSize > 0 && !pm.pipeline.isArchive {
+		pct := float64(br) / float64(pm.pipeline.fileSize) * 100
+		if pct > 100 {
+			pct = 100
+		}
+		pctStr = fmt.Sprintf("  %.1f%%", pct)
+		if bytesPerSec > 0 && pct < 99.9 {
+			remaining := float64(pm.pipeline.fileSize-br) / bytesPerSec
+			etaStr = "  ETA " + formatDuration(time.Duration(remaining)*time.Second)
+		}
+	}
+
+	panel := fmt.Sprintf("  %s%s%s", statusStr, sValue.Render(pctStr), sDim.Render(etaStr))
+	if lr > 0 {
+		var keptPct string
+		if lr > 0 {
+			keptPct = fmt.Sprintf(" (%.0f%% kept)", float64(lk)/float64(lr)*100)
+		}
+		panel += fmt.Sprintf("\n  Lines: %s read  %s kept%s  %s dropped",
+			sValue.Render(commaFmt(lr)),
+			sSuccess.Render(commaFmt(lk)),
+			sDim.Render(keptPct),
+			sError.Render(commaFmt(ld)))
+	} else {
+		panel += fmt.Sprintf("\n  Lines: %s read  %s kept  %s dropped",
+			sValue.Render(commaFmt(lr)),
+			sSuccess.Render(commaFmt(lk)),
+			sError.Render(commaFmt(ld)))
+	}
+	panel += fmt.Sprintf("\n  Read: %s  Written: %s",
 		sValue.Render(humanSize(br)),
-		sValue.Render(humanSize(bw)),
-		sValue.Render(speed))
+		sValue.Render(humanSize(bw)))
+	panel += fmt.Sprintf("\n  Speed: %s  %s",
+		sValue.Render(speed),
+		sDim.Render(linesPerSec))
 	panel += fmt.Sprintf("\n  Elapsed: %s", sValue.Render(formatDuration(elapsed)))
 
 	if pm.pipeline.status == pipeRunning {
 		panel += fmt.Sprintf("\n  CPU: %.1f%%  RAM: %s",
 			pm.metrics.cpuPct,
 			humanSize(pm.metrics.rssBytes))
-		if pm.metrics.ioReadBytes > 0 || pm.metrics.ioWriteBytes > 0 {
-			panel += fmt.Sprintf("  IO: R %s / W %s",
-				humanSize(pm.metrics.ioReadBytes),
-				humanSize(pm.metrics.ioWriteBytes))
-		}
 	}
 
 	panelBox := sPanel.Width(width - 4).Render(panel)
@@ -400,7 +440,7 @@ func (cr *atomicCounterReader) Read(p []byte) (int, error) {
 
 // --- System Metrics ---
 
-func getCPUTimePercent() float64 {
+func getCPURawTicks() float64 {
 	data, err := os.ReadFile("/proc/self/stat")
 	if err != nil {
 		return 0
@@ -411,21 +451,7 @@ func getCPUTimePercent() float64 {
 	}
 	utime, _ := strconv.ParseFloat(fields[13], 64)
 	stime, _ := strconv.ParseFloat(fields[14], 64)
-	total := utime + stime
-
-	uptimeData, err := os.ReadFile("/proc/uptime")
-	if err != nil {
-		return 0
-	}
-	uptimeFields := strings.Fields(string(uptimeData))
-	if len(uptimeFields) == 0 {
-		return 0
-	}
-	uptime, _ := strconv.ParseFloat(uptimeFields[0], 64)
-
-	numCPU := float64(runtime.NumCPU())
-	hz := 100.0
-	return (total / hz / uptime / numCPU) * 100.0
+	return utime + stime
 }
 
 func getRSSBytes() int64 {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -9,46 +10,75 @@ func (s summaryModel) View(width, maxHeight int) string {
 	header := sHeader.Render("  ✅ SUMMARY")
 	lines := []string{"", header, ""}
 
-	// Stats panel
-	panel := fmt.Sprintf("  %s %s", sSubHeader.Render("Input:"), sValue.Render(s.inputFile))
-	panel += fmt.Sprintf("\n  %s %s", sSubHeader.Render("Output:"), sSuccess.Render(s.outputFile))
-	panel += "\n"
-	panel += fmt.Sprintf("\n  %s %s lines", sSubHeader.Render("Read:"), sValue.Render(commaFmt(s.linesRead)))
-	panel += fmt.Sprintf("\n  %s %s lines", sSubHeader.Render("Kept:"), sSuccess.Render(commaFmt(s.linesKept)))
-	panel += fmt.Sprintf("\n  %s %s lines", sSubHeader.Render("Dropped:"), sError.Render(commaFmt(s.linesDropped)))
+	// Output path — show absolute path so user can find the file
+	absOut := s.outputFile
+	if abs, err := filepath.Abs(s.outputFile); err == nil {
+		absOut = abs
+	}
+	outBox := sPanelGreen.Width(width - 4).Render(
+		sSubHeader.Render("  Output file\n") +
+			"  " + sSuccess.Render(absOut),
+	)
+	lines = append(lines, outBox)
+	lines = append(lines, "")
 
-	if s.linesRead > 0 {
-		pct := float64(s.linesKept) / float64(s.linesRead) * 100
-		panel += fmt.Sprintf("\n  %s %.1f%%", sSubHeader.Render("Retention:"), pct)
+	// Two-column stats panel
+	var throughput string
+	if s.elapsed.Seconds() > 0 {
+		bps := float64(s.bytesRead) / s.elapsed.Seconds()
+		throughput = humanSpeed(bps)
 	}
 
-	panel += fmt.Sprintf("\n  %s %s", sSubHeader.Render("Data read:"), sValue.Render(humanSize(s.bytesRead)))
-	panel += fmt.Sprintf("\n  %s %s", sSubHeader.Render("Data written:"), sSuccess.Render(humanSize(s.bytesWritten)))
-	panel += fmt.Sprintf("\n  %s %s", sSubHeader.Render("Elapsed:"), sValue.Render(formatDuration(s.elapsed)))
+	var retentionBar string
+	var retentionPct float64
+	if s.linesRead > 0 {
+		retentionPct = float64(s.linesKept) / float64(s.linesRead) * 100
+		barWidth := width - 24
+		if barWidth < 10 {
+			barWidth = 10
+		}
+		filled := int(retentionPct / 100 * float64(barWidth))
+		if filled > barWidth {
+			filled = barWidth
+		}
+		retentionBar = sSuccess.Render(strings.Repeat("█", filled)) +
+			sDimmer.Render(strings.Repeat("░", barWidth-filled)) +
+			sValue.Render(fmt.Sprintf("  %.1f%%", retentionPct))
+	}
 
-	panelBox := sPanelGreen.Width(width - 4).Render(panel)
-	lines = append(lines, panelBox)
+	panel := ""
+	panel += fmt.Sprintf("  %-18s %s\n", sSubHeader.Render("Input:"), sDim.Render(filepath.Base(s.inputFile)))
+	panel += fmt.Sprintf("\n  %-18s %s    %s\n", sSubHeader.Render("Lines read:"), sValue.Render(commaFmt(s.linesRead)), sDim.Render("Data read:   "+humanSize(s.bytesRead)))
+	panel += fmt.Sprintf("  %-18s %s    %s\n", sSubHeader.Render("Lines kept:"), sSuccess.Render(commaFmt(s.linesKept)), sDim.Render("Data written: "+humanSize(s.bytesWritten)))
+	panel += fmt.Sprintf("  %-18s %s    %s\n", sSubHeader.Render("Lines dropped:"), sError.Render(commaFmt(s.linesDropped)), sDim.Render("Elapsed:      "+formatDuration(s.elapsed)))
+	if throughput != "" {
+		panel += fmt.Sprintf("  %-18s %s\n", sSubHeader.Render("Throughput:"), sValue.Render(throughput))
+	}
 
-	// Rules applied
-	lines = append(lines, "")
+	if retentionBar != "" {
+		panel += fmt.Sprintf("\n  %s\n  %s", sSubHeader.Render("Retention"), retentionBar)
+	}
+
+	lines = append(lines, sPanel.Width(width-4).Render(panel))
+
+	// Filters applied
 	var rules []string
 	if s.minLen > 0 {
-		rules = append(rules, fmt.Sprintf("min length: %d", s.minLen))
+		rules = append(rules, fmt.Sprintf("min=%d", s.minLen))
 	}
 	if s.maxLen > 0 {
-		rules = append(rules, fmt.Sprintf("max length: %d", s.maxLen))
+		rules = append(rules, fmt.Sprintf("max=%d", s.maxLen))
 	}
 	if s.asciiOnly {
-		rules = append(rules, "ASCII only [\\x20-\\x7E]")
+		rules = append(rules, "ascii-only")
 	}
 	if len(rules) > 0 {
-		rulesStr := sDim.Render("  Rules applied: ") + sSuccess.Render(strings.Join(rules, ", "))
-		lines = append(lines, rulesStr)
+		lines = append(lines, "")
+		lines = append(lines, sDim.Render("  Filters: ")+sSuccess.Render(strings.Join(rules, ", ")))
 	}
 
-	// Footer
 	lines = append(lines, "")
-	lines = append(lines, sDim.Render("  [q] Exit  [r] Restart with new file"))
+	lines = append(lines, sDim.Render("  [q] Exit  [r] Process another file"))
 
 	return strings.Join(lines, "\n")
 }

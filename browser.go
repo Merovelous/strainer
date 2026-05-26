@@ -99,7 +99,10 @@ func (b browserModel) Update(msg tea.Msg) (browserModel, tea.Cmd) {
 		case "down", "j":
 			if b.cursor < len(b.entries)-1 {
 				b.cursor++
-				visible := 20 // approximate
+				visible := b.windowHeight - 9
+				if visible < 5 {
+					visible = 20
+				}
 				if b.cursor >= b.offset+visible {
 					b.offset = b.cursor - visible + 1
 				}
@@ -154,7 +157,7 @@ func (b browserModel) View(maxHeight int) string {
 	lines := []string{"", header, dir, ""}
 
 	// Entries
-	visible := maxHeight - 8
+	visible := maxHeight - 6
 	if visible < 5 {
 		visible = 5
 	}
