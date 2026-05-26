@@ -376,7 +376,7 @@ func (p *pipelineModel) start() {
 				args = append(args, p.selectedArchiveFile)
 			}
 			// CommandContext kills the 7z process when ctx is cancelled.
-			cmd := exec.CommandContext(p.ctx, "7z", args...)
+			cmd := exec.CommandContext(p.ctx, sevenZipBin, args...)
 			stdout, err := cmd.StdoutPipe()
 			if err != nil {
 				runErr = err

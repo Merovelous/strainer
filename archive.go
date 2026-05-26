@@ -1,11 +1,24 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"os/exec"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// sevenZipBin is detected once at startup — "7zz" on macOS, "7z" on Linux.
+var sevenZipBin = func() string {
+	for _, name := range []string{"7z", "7zz", "7za"} {
+		if _, err := exec.LookPath(name); err == nil {
+			return name
+		}
+	}
+	return "7z" // fall through to a clear error message at runtime
+}()
 
 func newArchivePickerModel(archivePath string) (archivePickerModel, tea.Cmd) {
 	ap := archivePickerModel{archivePath: archivePath, loading: true}
@@ -14,11 +27,17 @@ func newArchivePickerModel(archivePath string) (archivePickerModel, tea.Cmd) {
 
 func (ap archivePickerModel) loadEntries() tea.Cmd {
 	return func() tea.Msg {
-		out, err := runCommand("7z", "l", ap.archivePath)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, sevenZipBin, "l", ap.archivePath)
+		out, err := cmd.Output()
 		if err != nil {
-			return archiveReadyMsg{err: fmt.Errorf("7z l failed: %w\n%s", err, out)}
+			if ctx.Err() != nil {
+				return archiveReadyMsg{err: fmt.Errorf("archive scan timed out (30s)")}
+			}
+			return archiveReadyMsg{err: fmt.Errorf("%s l failed: %w\n%s", sevenZipBin, err, string(out))}
 		}
-		entries := parse7zListing(out)
+		entries := parse7zListing(string(out))
 		return archiveReadyMsg{entries: entries}
 	}
 }
@@ -26,65 +45,82 @@ func (ap archivePickerModel) loadEntries() tea.Cmd {
 func parse7zListing(output string) []archiveEntry {
 	lines := strings.Split(output, "\n")
 
-	// Find the separator line: "---... ---..." (dashes with spaces)
+	// Find the first separator line (only dashes and spaces, ≥10 chars).
+	// The separator line itself tells us where the name column starts — the
+	// last run of '-' chars begins at the name column offset.
 	sepIdx := -1
 	nameColStart := -1
 	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if len(trimmed) >= 15 && strings.Contains(trimmed, " ") && strings.Trim(trimmed, "- ") == "" {
+		if isSepLine(line) {
 			sepIdx = i
+			nameColStart = findNameCol(line)
 			break
-		}
-		// Find "Name" column position in header
-		if strings.Contains(trimmed, "Name") && strings.Contains(trimmed, "Size") {
-			nameColStart = strings.Index(line, "Name")
 		}
 	}
 	if sepIdx == -1 {
 		return nil
 	}
 
-	// Default: filename is last whitespace-delimited field
-	// But if we found the Name column position, use that for cleaner parsing
-	usePosition := nameColStart > 0
-
 	var entries []archiveEntry
 	for i := sepIdx + 1; i < len(lines); i++ {
 		line := lines[i]
 		trimmed := strings.TrimSpace(line)
-
 		if trimmed == "" {
 			continue
 		}
-
-		// Second dash line = end of file list
-		if len(trimmed) >= 15 && strings.Contains(trimmed, " ") && strings.Trim(trimmed, "- ") == "" {
+		if isSepLine(line) || isSummaryLine(trimmed) {
 			break
 		}
 
-		// Summary line (contains "files," or "folders") = end
-		if strings.Contains(trimmed, "files,") || strings.Contains(trimmed, "folders") {
-			break
-		}
-
-		// Extract filename
 		var name string
-		if usePosition && len(line) > nameColStart {
+		if nameColStart > 0 && len(line) > nameColStart {
 			name = strings.TrimSpace(line[nameColStart:])
 		} else {
+			// Fallback: last whitespace field (breaks on filenames with spaces)
 			fields := strings.Fields(trimmed)
-			if len(fields) < 5 {
-				continue
+			if len(fields) > 0 {
+				name = fields[len(fields)-1]
 			}
-			name = fields[len(fields)-1]
 		}
-
 		if name == "" {
 			continue
 		}
 		entries = append(entries, archiveEntry{name: name, index: len(entries)})
 	}
 	return entries
+}
+
+// isSepLine detects a 7z column separator: only dashes and spaces, ≥10 chars.
+func isSepLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	return len(trimmed) >= 10 && strings.Trim(trimmed, "- ") == ""
+}
+
+// findNameCol returns the index where the last run of '-' chars begins in the
+// separator line — that position is the start of the filename column.
+func findNameCol(sepLine string) int {
+	inDash, lastStart := false, -1
+	for i, ch := range sepLine {
+		if ch == '-' {
+			if !inDash {
+				inDash = true
+				lastStart = i
+			}
+		} else {
+			inDash = false
+		}
+	}
+	return lastStart
+}
+
+// isSummaryLine detects the post-listing summary row, e.g. "1 files, 0 folders".
+// It must start with a digit to avoid matching filenames that contain "files".
+func isSummaryLine(trimmed string) bool {
+	if len(trimmed) == 0 || trimmed[0] < '0' || trimmed[0] > '9' {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	return strings.Contains(lower, "file") || strings.Contains(lower, "folder")
 }
 
 func (ap archivePickerModel) Update(msg tea.Msg) (archivePickerModel, tea.Cmd) {
