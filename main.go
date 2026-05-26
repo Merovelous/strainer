@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -50,22 +51,27 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case stateFilters:
 				m.state = stateBrowser
 				return m, nil
+			case stateOverwriteConfirm:
+				m.state = stateFilters
+				return m, nil
 			case stateProcessing:
 				p := m.processing.pipeline
+				p.cancel()
 				m.state = stateSummary
 				m.summary = summaryModel{
 					inputFile:    m.inputFile,
 					outputFile:   m.outputFile,
-					linesRead:    p.linesRead,
-					linesKept:    p.linesKept,
-					linesDropped: p.linesDropped,
-					bytesRead:    p.bytesRead,
-					bytesWritten: p.bytesWritten,
+					linesRead:    atomic.LoadInt64(&p.linesRead),
+					linesKept:    atomic.LoadInt64(&p.linesKept),
+					linesDropped: atomic.LoadInt64(&p.linesDropped),
+					bytesRead:    atomic.LoadInt64(&p.bytesRead),
+					bytesWritten: atomic.LoadInt64(&p.bytesWritten),
 					elapsed:      time.Since(p.startAt),
 					minLen:       m.minLen,
 					maxLen:       m.maxLen,
 					asciiOnly:    m.asciiOnly,
 					ready:        true,
+					cancelled:    true,
 				}
 				return m, nil
 			case stateSummary:
@@ -105,12 +111,20 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.maxLen = m.filters.getMaxLen()
 		m.asciiOnly = m.filters.isASCIIOnly()
 
+		if _, err := os.Stat(outputName); err == nil {
+			m.state = stateOverwriteConfirm
+			return m, nil
+		}
+
 		m.state = stateProcessing
 		pm := newProcessingModel(m.inputFile, m.selectedArchiveFile, outputName, m.minLen, m.maxLen, m.asciiOnly, m.isArchive)
 		m.processing = pm
 		return m, m.processing.Init()
 
 	case pipeDoneMsg:
+		if m.state != stateProcessing {
+			return m, nil
+		}
 		m.state = stateSummary
 		p := m.processing.pipeline
 		m.summary = summaryModel{
@@ -130,6 +144,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case pipeErrMsg:
+		if m.state != stateProcessing {
+			return m, nil
+		}
 		m.state = stateSummary
 		p := m.processing.pipeline
 		m.summary = summaryModel{
@@ -174,6 +191,20 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.processing, cmd = m.processing.Update(msg, globalTeaProgram)
 		return m, cmd
+	case stateOverwriteConfirm:
+		if km, ok := msg.(tea.KeyMsg); ok {
+			switch km.String() {
+			case "y":
+				m.state = stateProcessing
+				pm := newProcessingModel(m.inputFile, m.selectedArchiveFile, m.outputFile, m.minLen, m.maxLen, m.asciiOnly, m.isArchive)
+				m.processing = pm
+				return m, m.processing.Init()
+			case "n", "esc":
+				m.state = stateFilters
+				return m, nil
+			}
+		}
+
 	case stateSummary:
 		if msg, ok := msg.(tea.KeyMsg); ok && msg.String() == "r" {
 			m = initialModel()
@@ -213,6 +244,15 @@ func (m appModel) View() string {
 		content = m.archivePicker.View(h - 5)
 	case stateFilters:
 		content = m.filters.View(w, h-5)
+	case stateOverwriteConfirm:
+		absOut := m.outputFile
+		if abs, err := filepath.Abs(m.outputFile); err == nil {
+			absOut = abs
+		}
+		header := sWarning.Render("  ⚠  OUTPUT FILE EXISTS")
+		detail := "\n\n  " + sDim.Render("File: ") + sWarning.Render(absOut) + "\n\n  Overwrite the existing file?"
+		box := sPanelYellow.Width(w - 4).Render(header + detail)
+		content = "\n" + box + "\n\n" + sDim.Render("  [y] Overwrite  [n / Esc / q] Go back")
 	case stateProcessing:
 		content = m.processing.View(w, h-5)
 	case stateSummary:
@@ -227,6 +267,8 @@ func (m appModel) View() string {
 		footer = sDimmer.Render("  Choose a file from the archive")
 	case stateFilters:
 		footer = sDimmer.Render("  Configure filter rules, then press Tab to start")
+	case stateOverwriteConfirm:
+		footer = sDimmer.Render("  Output file already exists")
 	case stateProcessing:
 		footer = sDimmer.Render("  Processing in progress...")
 	case stateSummary:

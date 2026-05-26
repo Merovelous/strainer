@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -21,6 +22,7 @@ func newProcessingModel(input, selectedArchiveFile, output string, minLen, maxLe
 		fileSize = info.Size()
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
 	return processingModel{
 		pipeline: &pipelineModel{
 			inputFile:           input,
@@ -31,6 +33,8 @@ func newProcessingModel(input, selectedArchiveFile, output string, minLen, maxLe
 			maxLen:              maxLen,
 			asciiOnly:           asciiOnly,
 			isArchive:           isArchive,
+			ctx:                 ctx,
+			cancel:              cancel,
 			done:                make(chan struct{}),
 			ready:               true,
 		},
@@ -327,8 +331,14 @@ func (p *pipelineModel) start() {
 	go func() {
 		var runErr error
 		defer func() {
-			p.err = runErr
 			p.finishAt = time.Now()
+			if p.ctx.Err() != nil {
+				// User cancelled — delete the partial output file.
+				os.Remove(p.outputFile)
+				p.err = nil
+			} else {
+				p.err = runErr
+			}
 			close(p.done)
 		}()
 
@@ -338,7 +348,8 @@ func (p *pipelineModel) start() {
 			if p.selectedArchiveFile != "" {
 				args = append(args, p.selectedArchiveFile)
 			}
-			cmd := exec.Command("7z", args...)
+			// CommandContext kills the 7z process when ctx is cancelled.
+			cmd := exec.CommandContext(p.ctx, "7z", args...)
 			stdout, err := cmd.StdoutPipe()
 			if err != nil {
 				runErr = err
@@ -375,8 +386,17 @@ func (p *pipelineModel) start() {
 		scanner.Buffer(buf, 1024*1024)
 
 		for scanner.Scan() {
+			select {
+			case <-p.ctx.Done():
+				return
+			default:
+			}
 			atomic.AddInt64(&p.linesRead, 1)
 			line := scanner.Bytes()
+			// Strip Windows CRLF — Scanner splits on \n but leaves \r on the token.
+			if len(line) > 0 && line[len(line)-1] == '\r' {
+				line = line[:len(line)-1]
+			}
 			if !p.filterLine(line) {
 				atomic.AddInt64(&p.linesDropped, 1)
 				continue
@@ -388,7 +408,9 @@ func (p *pipelineModel) start() {
 		}
 
 		if err := scanner.Err(); err != nil {
-			runErr = err
+			if p.ctx.Err() == nil {
+				runErr = err
+			}
 			return
 		}
 

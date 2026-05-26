@@ -1,6 +1,9 @@
 package main
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 type viewState int
 
@@ -8,6 +11,7 @@ const (
 	stateBrowser viewState = iota
 	stateArchivePicker
 	stateFilters
+	stateOverwriteConfirm
 	stateProcessing
 	stateSummary
 )
@@ -118,6 +122,11 @@ type pipelineModel struct {
 	asciiOnly           bool
 	isArchive           bool
 
+	// ctx/cancel allow the TUI to stop the goroutine. The goroutine checks
+	// ctx.Done() between lines and cleans up the partial output file on cancel.
+	ctx    context.Context
+	cancel context.CancelFunc
+
 	// done is closed by the goroutine when it finishes (success or error).
 	// err and finishAt are written before close(done), so reading them after
 	// observing the closed channel is safe without additional synchronization.
@@ -150,6 +159,7 @@ type summaryModel struct {
 	maxLen       int
 	asciiOnly    bool
 	ready        bool
+	cancelled    bool
 }
 
 type processingModel struct {

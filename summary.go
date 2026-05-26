@@ -7,20 +7,30 @@ import (
 )
 
 func (s summaryModel) View(width, maxHeight int) string {
-	header := sHeader.Render("  ✅ SUMMARY")
+	var header string
+	if s.cancelled {
+		header = sWarning.Render("  ⚡ CANCELLED")
+	} else {
+		header = sHeader.Render("  ✅ SUMMARY")
+	}
 	lines := []string{"", header, ""}
 
-	// Output path — show absolute path so user can find the file
-	absOut := s.outputFile
-	if abs, err := filepath.Abs(s.outputFile); err == nil {
-		absOut = abs
+	if s.cancelled {
+		lines = append(lines, sDim.Render("  Partial output file removed."))
+		lines = append(lines, "")
+	} else {
+		// Output path — show absolute path so user can find the file
+		absOut := s.outputFile
+		if abs, err := filepath.Abs(s.outputFile); err == nil {
+			absOut = abs
+		}
+		outBox := sPanelGreen.Width(width - 4).Render(
+			sSubHeader.Render("  Output file\n") +
+				"  " + sSuccess.Render(absOut),
+		)
+		lines = append(lines, outBox)
+		lines = append(lines, "")
 	}
-	outBox := sPanelGreen.Width(width - 4).Render(
-		sSubHeader.Render("  Output file\n") +
-			"  " + sSuccess.Render(absOut),
-	)
-	lines = append(lines, outBox)
-	lines = append(lines, "")
 
 	// Two-column stats panel
 	var throughput string
