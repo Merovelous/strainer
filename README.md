@@ -30,10 +30,11 @@ That said — if you already have the file path, the filter as a regex, and you 
 
 - **File browser** — navigate the filesystem, archives auto-detected and highlighted
 - **Archive support** — `.7z`, `.zip`, `.tar.gz`, `.tar.bz2`, `.tar.xz`, `.rar`, `.tgz`, `.xz`
-- **Filter configuration** — min length, max length, ASCII-only (`[\x20-\x7E]`)
+- **Filter configuration** — min/max length, ASCII-only, regex pattern, deduplication
 - **Live metrics** — throughput, lines read/kept/dropped, CPU%, RAM (RSS), I/O bytes
 - **Progress bar** — determinate for plain files, indeterminate for archives
 - **Smart output naming** — filename derived from source and active filters
+- **CLI mode** — `--input`, `--output`, `--min`, `--max`, `--ascii`, `--regex`, `--dedup` flags for scripting
 - **Single binary** — no runtime dependencies beyond `7z` for archive extraction
 
 ---
@@ -63,11 +64,13 @@ go install github.com/Merovelous/strainer@latest
 
 ## Usage
 
+### TUI
+
 ```bash
 ./strainer
 ```
 
-Launch the TUI, browse to a wordlist file or archive, configure filters, and press Tab to start processing.
+Launch the TUI, browse to a wordlist file or archive, configure filters, navigate to **▶ Start Processing** and press `Enter`.
 
 ### Controls
 
@@ -77,18 +80,40 @@ Launch the TUI, browse to a wordlist file or archive, configure filters, and pre
 | `Enter` / `Space` | Select file or toggle filter |
 | `e` | Edit filter value |
 | `Backspace` | Go to parent directory |
-| `Tab` | Confirm filters and start processing |
+| `Tab` | Quick-start (jump straight to processing) |
 | `Esc` | Back (from filter screen) |
 | `q` | Back / Quit |
 | `r` | Process another file (from summary) |
 
-### Example
+### TUI example
 
 1. Launch `./strainer`
 2. Browse to `weakpass_4a.txt.7z`
 3. Select `rockyou.txt` from the archive contents
 4. Set **Min Length** = 8, **Max Length** = 12, enable **ASCII Only**
-5. Press `Tab` — output: `rockyou_8to12_ascii.txt`
+5. Navigate to **▶ Start Processing** and press `Enter` — output: `rockyou_8to12_ascii.txt`
+
+### CLI mode
+
+```bash
+# Plain file
+strainer --input rockyou.txt --min 8 --max 12 --ascii --output rockyou_8to12_ascii.txt
+
+# File inside an archive
+strainer --input weakpass.7z --file rockyou.txt --min 8 --ascii --output out.txt
+
+# With regex and deduplication
+strainer --input dump.txt --regex '^[a-zA-Z0-9]{8,}$' --dedup --output clean.txt
+
+# Quiet (no progress, summary line only)
+strainer --input dump.txt --min 8 --output out.txt --quiet
+
+# Batch loop
+for f in /mnt/wordlists/*.7z; do
+  strainer --input "$f" --file rockyou.txt --min 8 --max 16 --ascii \
+           --output "${f%.7z}_filtered.txt" --quiet
+done
+```
 
 ---
 
@@ -110,13 +135,48 @@ Metrics (CPU%, RSS, I/O) are sampled from `/proc/self` every 100ms on a separate
 
 ## Filters
 
-| Filter | Description |
-|---|---|
-| Min Length | Drop lines shorter than N bytes |
-| Max Length | Drop lines longer than N bytes |
-| ASCII Only | Keep only lines where every byte is in `[\x20-\x7E]` (printable ASCII, no control chars) |
+| Filter | Flag | Description |
+|---|---|---|
+| Min Length | `--min N` | Drop lines shorter than N bytes |
+| Max Length | `--max N` | Drop lines longer than N bytes |
+| ASCII Only | `--ascii` | Keep only lines where every byte is in `[\x20-\x7E]` (printable ASCII, no control chars) |
+| Regex Match | `--regex PATTERN` | Keep only lines matching the Go regexp pattern |
+| Deduplicate | `--dedup` | Drop duplicate lines (first occurrence wins; uses in-memory map) |
 
 Filters combine: a line must pass all enabled checks to be written to output.
+
+---
+
+## Performance
+
+Task: filter a 10 GB synthetic wordlist (859 M lines) — keep lines where length is 8–12 **and** all bytes are printable ASCII `[\x20-\x7E]`. 40% of lines pass the filter.
+
+| Tool | Command | Time | Throughput |
+|---|---|---|---|
+| **strainer** | `strainer --input bench.txt --min 8 --max 12 --ascii --output /dev/null --quiet` | **28.8 s** | **~347 MB/s** |
+| ripgrep 15.1 | `rg '^[\x20-\x7E]{8,12}$' bench.txt > /dev/null` | 51.4 s | ~194 MB/s |
+
+**strainer is ~1.8× faster than ripgrep** on this workload.
+
+Why strainer wins here:
+- `filterLine` works on `[]byte` directly — no string allocation per line
+- Length check = two integer comparisons; ASCII check = one byte-range loop — no regex engine overhead
+- 256 KB write buffer — batched `write()` syscalls
+- Single goroutine: read → filter → write, no channel hops
+
+ripgrep pays per-line cost for regex compilation context, UTF-8 validation, and match extraction even when the filter is trivially simple.
+
+**Environment:** AMD Ryzen 7 5800H, 6.6 GB RAM, virtual disk (HDD-backed), Linux 6.18, Go 1.26.3, ripgrep 15.1.0
+
+To reproduce:
+
+```bash
+cd bench
+go run gen_bench.go -size 10000 -out bench.txt
+bash run_bench.sh
+```
+
+`run_bench.sh` uses `hyperfine` for multi-run statistics if available, otherwise falls back to `time`.
 
 ---
 
