@@ -31,16 +31,47 @@ type cliFlags struct {
 // CLI mode is active when --input is provided.
 func parseFlags() (cliFlags, bool) {
 	var f cliFlags
-	flag.StringVar(&f.input, "input", "", "input `file` or archive to process")
-	flag.StringVar(&f.file, "file", "", "file inside archive to extract and process")
-	flag.StringVar(&f.output, "output", "", "output `file` path (required)")
-	flag.IntVar(&f.min, "min", 0, "minimum line `length` (0 = no limit)")
-	flag.IntVar(&f.max, "max", 0, "maximum line `length` (0 = no limit)")
+
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "strainer v%s — fast wordlist filter\n\n", Version)
+		fmt.Fprintln(os.Stderr, "Usage:")
+		fmt.Fprintln(os.Stderr, "  strainer --input <file> --output <file> [filters]")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "Required:")
+		fmt.Fprintln(os.Stderr, "  --input  <file>    Wordlist file or archive (.7z .zip .tar.gz ...)")
+		fmt.Fprintln(os.Stderr, "  --output <file>    Output file path")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "Archive:")
+		fmt.Fprintln(os.Stderr, "  --entry  <name>    File to extract from the archive (required when --input is an archive)")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "Filters (at least one recommended):")
+		fmt.Fprintln(os.Stderr, "  --min    <n>       Keep lines with length >= n")
+		fmt.Fprintln(os.Stderr, "  --max    <n>       Keep lines with length <= n")
+		fmt.Fprintln(os.Stderr, "  --ascii            Keep ASCII-printable lines only (0x20-0x7E)")
+		fmt.Fprintln(os.Stderr, "  --regex  <pat>     Keep lines matching regex pattern")
+		fmt.Fprintln(os.Stderr, "  --dedup            Deduplicate lines")
+		fmt.Fprintln(os.Stderr, "  --bloom-size <s>   Bloom filter RAM for --dedup on large files")
+		fmt.Fprintln(os.Stderr, "                     Sizes: 256m 512m 1g 4g 8g or custom (e.g. 16g, 2048m)")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "Other:")
+		fmt.Fprintln(os.Stderr, "  --quiet            Suppress progress output (errors still printed)")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "Examples:")
+		fmt.Fprintln(os.Stderr, "  strainer --input rockyou.txt --output out.txt --min 8 --max 12 --ascii")
+		fmt.Fprintln(os.Stderr, "  strainer --input dump.7z --entry passwords.txt --output out.txt --dedup")
+		fmt.Fprintln(os.Stderr, "  strainer --input huge.txt --output deduped.txt --dedup --bloom-size 4g")
+	}
+
+	flag.StringVar(&f.input, "input", "", "wordlist file or archive")
+	flag.StringVar(&f.file, "entry", "", "file to extract from archive (required when --input is an archive)")
+	flag.StringVar(&f.output, "output", "", "output file path")
+	flag.IntVar(&f.min, "min", 0, "keep lines with length >= n (0 = no limit)")
+	flag.IntVar(&f.max, "max", 0, "keep lines with length <= n (0 = no limit)")
 	flag.BoolVar(&f.ascii, "ascii", false, "keep ASCII-printable lines only")
-	flag.StringVar(&f.regexStr, "regex", "", "keep lines matching `pattern`")
+	flag.StringVar(&f.regexStr, "regex", "", "keep lines matching pattern")
 	flag.BoolVar(&f.dedup, "dedup", false, "deduplicate lines")
-	flag.StringVar(&f.bloomSize, "bloom-size", "", "bloom filter size for dedup: 256m, 512m, 1g, 4g, 8g (default: exact map)")
-	flag.BoolVar(&f.quiet, "quiet", false, "suppress progress output (errors still printed)")
+	flag.StringVar(&f.bloomSize, "bloom-size", "", "bloom filter size for dedup (e.g. 1g, 4g, 2048m)")
+	flag.BoolVar(&f.quiet, "quiet", false, "suppress progress output")
 	flag.Parse()
 	return f, f.input != ""
 }
@@ -57,8 +88,18 @@ func runCLI(f cliFlags) int {
 
 	isArchive := pipeline.IsArchiveFile(f.input)
 	if isArchive && f.file == "" {
-		fmt.Fprintln(os.Stderr, "error: --file is required when input is an archive")
+		fmt.Fprintln(os.Stderr, "error: --entry is required when input is an archive")
 		return 1
+	}
+
+	if f.min > 0 && f.max > 0 && f.min > f.max {
+		fmt.Fprintf(os.Stderr, "error: --min (%d) must be <= --max (%d)\n", f.min, f.max)
+		return 1
+	}
+
+	noFilters := f.min == 0 && f.max == 0 && !f.ascii && f.regexStr == "" && !f.dedup
+	if noFilters {
+		fmt.Fprintln(os.Stderr, "warning: no filters specified — output will be identical to input (use --min, --max, --ascii, --regex, or --dedup)")
 	}
 
 	var re *regexp.Regexp
