@@ -1,0 +1,56 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & publish
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Build binaries
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          LDFLAGS="-s -w -X main.Version=${VERSION}"
+          mkdir -p dist
+
+          targets=(
+            "linux   amd64"
+            "linux   arm64"
+            "darwin  amd64"
+            "darwin  arm64"
+            "windows amd64"
+          )
+
+          for t in "${targets[@]}"; do
+            OS=$(echo $t | awk '{print $1}')
+            ARCH=$(echo $t | awk '{print $2}')
+            NAME="strainer_${OS}_${ARCH}"
+            OUT="dist/${NAME}"
+            [ "$OS" = "windows" ] && OUT="${OUT}.exe"
+            GOOS=$OS GOARCH=$ARCH go build -ldflags="$LDFLAGS" -o "$OUT" ./cmd/strainer/
+            echo "✓ $OUT"
+          done
+
+          cd dist
+          sha256sum * > checksums.txt
+          cat checksums.txt
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
