@@ -13,15 +13,16 @@ import (
 )
 
 type cliFlags struct {
-	input    string
-	file     string
-	output   string
-	min      int
-	max      int
-	ascii    bool
-	regexStr string
-	dedup    bool
-	quiet    bool
+	input     string
+	file      string
+	output    string
+	min       int
+	max       int
+	ascii     bool
+	regexStr  string
+	dedup     bool
+	bloomSize string
+	quiet     bool
 }
 
 // parseFlags parses CLI flags and returns them plus whether CLI mode is active.
@@ -36,6 +37,7 @@ func parseFlags() (cliFlags, bool) {
 	flag.BoolVar(&f.ascii, "ascii", false, "keep ASCII-printable lines only")
 	flag.StringVar(&f.regexStr, "regex", "", "keep lines matching `pattern`")
 	flag.BoolVar(&f.dedup, "dedup", false, "deduplicate lines")
+	flag.StringVar(&f.bloomSize, "bloom-size", "", "bloom filter size for dedup: 256m, 512m, 1g, 4g, 8g (default: exact map)")
 	flag.BoolVar(&f.quiet, "quiet", false, "suppress progress output (errors still printed)")
 	flag.Parse()
 	return f, f.input != ""
@@ -67,6 +69,25 @@ func runCLI(f cliFlags) int {
 		}
 	}
 
+	var bloomBytes int64
+	switch f.bloomSize {
+	case "256m", "256M":
+		bloomBytes = 256 << 20
+	case "512m", "512M":
+		bloomBytes = 512 << 20
+	case "1g", "1G":
+		bloomBytes = 1 << 30
+	case "4g", "4G":
+		bloomBytes = 4 << 30
+	case "8g", "8G":
+		bloomBytes = 8 << 30
+	case "":
+		// no bloom filter
+	default:
+		fmt.Fprintf(os.Stderr, "error: invalid --bloom-size %q (use 256m, 512m, 1g, 4g, 8g)\n", f.bloomSize)
+		return 1
+	}
+
 	var fileSize int64
 	if info, err := os.Stat(f.input); err == nil {
 		fileSize = info.Size()
@@ -94,6 +115,7 @@ func runCLI(f cliFlags) int {
 		isArchive:           isArchive,
 		regex:               re,
 		deduplicate:         f.dedup,
+		bloomSize:           bloomBytes,
 		ctx:                 ctx,
 		cancel:              cancel,
 		done:                make(chan struct{}),

@@ -291,7 +291,7 @@ func TestBuildOutputName(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		f := newFilterModel(tt.input)
+		f := newFilterModel(tt.input, 0)
 		tt.setup(&f)
 		got := f.buildOutputName(tt.input)
 		if got != tt.want {
@@ -379,6 +379,60 @@ func TestMmapDedup(t *testing.T) {
 	want := "apple\nbanana\ncherry\ndate\n"
 	if string(got) != want {
 		t.Errorf("mmap dedup output =\n%q\nwant\n%q", string(got), want)
+	}
+	if p.linesRead != 7 {
+		t.Errorf("linesRead = %d, want 7", p.linesRead)
+	}
+	if p.linesKept != 4 {
+		t.Errorf("linesKept = %d, want 4", p.linesKept)
+	}
+	if p.linesDropped != 3 {
+		t.Errorf("linesDropped = %d, want 3", p.linesDropped)
+	}
+}
+
+// TestBloomDedup verifies that the bloom filter dedup path produces correct output
+// (no false negatives; occasional false positives are acceptable but don't occur
+// for a tiny test set with a generously sized filter).
+func TestBloomDedup(t *testing.T) {
+	input := filepath.Join(t.TempDir(), "input.txt")
+	output := filepath.Join(t.TempDir(), "output.txt")
+
+	content := "apple\nbanana\napple\ncherry\nbanana\ndate\napple\n"
+	if err := os.WriteFile(input, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	p := &pipelineModel{
+		inputFile:  input,
+		outputFile: output,
+		// Fake a fileSize beyond the mmap limit so canMmapDedup returns false,
+		// forcing the scanner + bloom path without touching the archive branch.
+		fileSize:    mmapMaxFileSize + 1,
+		deduplicate: true,
+		bloomSize:   1 << 20, // 1 MB — tiny filter, zero FPR for 7 lines
+		ctx:         ctx,
+		cancel:      cancel,
+		done:        make(chan struct{}),
+		ready:       true,
+	}
+
+	p.start()
+	<-p.done
+
+	if p.err != nil {
+		t.Fatalf("pipeline error: %v", p.err)
+	}
+
+	got, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := "apple\nbanana\ncherry\ndate\n"
+	if string(got) != want {
+		t.Errorf("bloom dedup output =\n%q\nwant\n%q", string(got), want)
 	}
 	if p.linesRead != 7 {
 		t.Errorf("linesRead = %d, want 7", p.linesRead)

@@ -90,6 +90,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case browserSelectMsg:
 		m.inputFile = msg.path
+		if info, err := os.Stat(msg.path); err == nil {
+			m.inputFileSize = info.Size()
+		}
 		if msg.isArchive {
 			m.isArchive = true
 			m.state = stateArchivePicker
@@ -99,13 +102,13 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.isArchive = false
 		m.state = stateFilters
-		m.filters = newFilterModel(filepath.Base(msg.path))
+		m.filters = newFilterModel(filepath.Base(msg.path), m.inputFileSize)
 		return m, nil
 
 	case archiveSelectMsg:
 		m.selectedArchiveFile = msg.file
 		m.state = stateFilters
-		m.filters = newFilterModel(msg.file)
+		m.filters = newFilterModel(msg.file, m.inputFileSize)
 		return m, nil
 
 	case filterConfirmMsg:
@@ -116,6 +119,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.asciiOnly = m.filters.isASCIIOnly()
 		m.regexStr = m.filters.getRegexStr()
 		m.deduplicate = m.filters.isDeduplicate()
+		m.bloomSize = m.filters.getBloomSize()
 
 		if _, err := os.Stat(outputName); err == nil {
 			m.state = stateOverwriteConfirm
@@ -127,7 +131,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			re, _ = regexp.Compile(m.regexStr)
 		}
 		m.state = stateProcessing
-		pm := newProcessingModel(m.inputFile, m.selectedArchiveFile, outputName, m.minLen, m.maxLen, m.asciiOnly, m.isArchive, re, m.deduplicate)
+		pm := newProcessingModel(m.inputFile, m.selectedArchiveFile, outputName, m.minLen, m.maxLen, m.asciiOnly, m.isArchive, re, m.deduplicate, m.bloomSize)
 		m.processing = pm
 		return m, m.processing.Init()
 
@@ -214,7 +218,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					re, _ = regexp.Compile(m.regexStr)
 				}
 				m.state = stateProcessing
-				pm := newProcessingModel(m.inputFile, m.selectedArchiveFile, m.outputFile, m.minLen, m.maxLen, m.asciiOnly, m.isArchive, re, m.deduplicate)
+				pm := newProcessingModel(m.inputFile, m.selectedArchiveFile, m.outputFile, m.minLen, m.maxLen, m.asciiOnly, m.isArchive, re, m.deduplicate, m.bloomSize)
 				m.processing = pm
 				return m, m.processing.Init()
 			case "n", "esc":

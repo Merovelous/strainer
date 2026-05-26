@@ -17,7 +17,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func newProcessingModel(input, selectedArchiveFile, output string, minLen, maxLen int, asciiOnly bool, isArchive bool, regex *regexp.Regexp, deduplicate bool) processingModel {
+func newProcessingModel(input, selectedArchiveFile, output string, minLen, maxLen int, asciiOnly bool, isArchive bool, regex *regexp.Regexp, deduplicate bool, bloomSize int64) processingModel {
 	var fileSize int64
 	if info, err := os.Stat(input); err == nil {
 		fileSize = info.Size()
@@ -36,6 +36,7 @@ func newProcessingModel(input, selectedArchiveFile, output string, minLen, maxLe
 			isArchive:           isArchive,
 			regex:               regex,
 			deduplicate:         deduplicate,
+			bloomSize:           bloomSize,
 			ctx:                 ctx,
 			cancel:              cancel,
 			done:                make(chan struct{}),
@@ -366,9 +367,9 @@ const maxArchiveOutput = 10 << 30
 func (p *pipelineModel) start() {
 	p.startAt = time.Now()
 	p.status = pipeRunning
-	// seen map is only needed for the scanner-based fallback dedup path
-	// (archives and Windows). Plain files on Linux/macOS use mmapDedup instead.
-	if p.deduplicate && (p.isArchive || !canMmapDedup(p.fileSize)) {
+	// seen map is only needed for the scanner-based fallback dedup path when bloom
+	// is not in use (archives and plain files > 4 GB on Linux/macOS, or all files on Windows).
+	if p.deduplicate && (p.isArchive || !canMmapDedup(p.fileSize)) && p.bloomSize == 0 {
 		p.seen = make(map[string]struct{})
 	}
 
@@ -385,6 +386,18 @@ func (p *pipelineModel) start() {
 			}
 			close(p.done)
 		}()
+
+		// Allocate bloom filter for the fallback dedup path (archives / files > 4 GB).
+		// mmap dedup always takes precedence for eligible plain files.
+		var bloom *bloomFilter
+		if p.deduplicate && p.bloomSize > 0 && (p.isArchive || !canMmapDedup(p.fileSize)) {
+			if avail, ok := availableRAM(); ok && p.bloomSize > avail*8/10 {
+				runErr = fmt.Errorf("bloom filter needs %s but only %s RAM available",
+					humanSize(p.bloomSize), humanSize(avail))
+				return
+			}
+			bloom = newBloomFilter(p.bloomSize)
+		}
 
 		var reader io.Reader
 		if p.isArchive {
@@ -466,12 +479,21 @@ func (p *pipelineModel) start() {
 				continue
 			}
 			if p.deduplicate {
-				key := string(line)
-				if _, exists := p.seen[key]; exists {
+				var isDup bool
+				if bloom != nil {
+					isDup = bloom.seenAndAdd(line)
+				} else {
+					key := string(line)
+					if _, exists := p.seen[key]; exists {
+						isDup = true
+					} else {
+						p.seen[key] = struct{}{}
+					}
+				}
+				if isDup {
 					atomic.AddInt64(&p.linesDropped, 1)
 					continue
 				}
-				p.seen[key] = struct{}{}
 			}
 			atomic.AddInt64(&p.linesKept, 1)
 			writer.Write(line)

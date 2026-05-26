@@ -33,10 +33,11 @@ type appModel struct {
 	quitting  bool
 
 	// Shared context
-	inputFile          string // selected input file or archive
+	inputFile           string // selected input file or archive
 	selectedArchiveFile string // file inside archive (empty if not archive)
-	isArchive          bool
-	workingDir         string
+	isArchive           bool
+	workingDir          string
+	inputFileSize       int64 // size of the input file (for FPR estimates)
 
 	// Filter config
 	minLen      int
@@ -44,6 +45,7 @@ type appModel struct {
 	asciiOnly   bool
 	regexStr    string
 	deduplicate bool
+	bloomSize   int64
 
 	// Output
 	outputFile string
@@ -96,6 +98,7 @@ type filterModel struct {
 	inputBuf      string
 	inputIdx      int
 	fileName      string
+	fileSize      int64
 	validationErr string
 }
 
@@ -106,6 +109,9 @@ type filterOption struct {
 	strValue   string // string value for regex pattern
 	dynamic    bool   // true = numeric input field
 	strDynamic bool   // true = string input field
+	cycle      bool     // true = cycle through choices with ←/→
+	choices    []string // options for cycle type
+	choiceIdx  int      // current choice index
 }
 
 type metricsModel struct {
@@ -132,6 +138,7 @@ type pipelineModel struct {
 	isArchive           bool
 	regex               *regexp.Regexp
 	deduplicate         bool
+	bloomSize           int64
 	seen                map[string]struct{}
 
 	// ctx/cancel allow the TUI to stop the goroutine. The goroutine checks

@@ -10,15 +10,20 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func newFilterModel(fileName string) filterModel {
+// bloomPresets maps choiceIdx → filter size in bytes; index 0 = disabled.
+var bloomPresets = []int64{0, 256 << 20, 512 << 20, 1 << 30, 4 << 30, 8 << 30}
+
+func newFilterModel(fileName string, fileSize int64) filterModel {
 	return filterModel{
 		fileName: fileName,
+		fileSize: fileSize,
 		options: []filterOption{
 			{name: "Min Length", dynamic: true},
 			{name: "Max Length", dynamic: true},
 			{name: "ASCII Only"},
 			{name: "Regex Match", strDynamic: true},
 			{name: "Deduplicate"},
+			{name: "Bloom Filter Size", cycle: true, choices: []string{"Off", "256 MB", "512 MB", "1 GB", "4 GB", "8 GB"}},
 		},
 	}
 }
@@ -61,6 +66,14 @@ func (f filterModel) getRegexStr() string {
 
 func (f filterModel) isDeduplicate() bool {
 	return f.options[4].enabled
+}
+
+func (f filterModel) getBloomSize() int64 {
+	opt := f.options[5]
+	if opt.choiceIdx <= 0 || opt.choiceIdx >= len(bloomPresets) {
+		return 0
+	}
+	return bloomPresets[opt.choiceIdx]
 }
 
 func (f filterModel) buildOutputName(inputPath string) string {
@@ -117,12 +130,30 @@ func (f filterModel) Update(msg tea.Msg) (filterModel, tea.Cmd) {
 			f.cursor = (f.cursor - 1 + total) % total
 		case "down", "j":
 			f.cursor = (f.cursor + 1) % total
+		case "left":
+			if f.cursor < len(f.options) {
+				opt := &f.options[f.cursor]
+				if opt.cycle && len(opt.choices) > 0 {
+					opt.choiceIdx = (opt.choiceIdx - 1 + len(opt.choices)) % len(opt.choices)
+				}
+			}
+		case "right":
+			if f.cursor < len(f.options) {
+				opt := &f.options[f.cursor]
+				if opt.cycle && len(opt.choices) > 0 {
+					opt.choiceIdx = (opt.choiceIdx + 1) % len(opt.choices)
+				}
+			}
 		case "enter", " ":
 			if f.cursor == len(f.options) {
 				return f.confirm()
 			}
 			opt := &f.options[f.cursor]
 			switch {
+			case opt.cycle:
+				if len(opt.choices) > 0 {
+					opt.choiceIdx = (opt.choiceIdx + 1) % len(opt.choices)
+				}
 			case opt.strDynamic && !opt.enabled:
 				opt.enabled = true
 				f.inputing = true
@@ -235,6 +266,33 @@ func (f filterModel) handleInput(msg tea.KeyMsg) (filterModel, tea.Cmd) {
 	return f, nil
 }
 
+// bloomAnnotation returns the FPR estimate and RAM availability hint for a given bloom size.
+func (f filterModel) bloomAnnotation(sizeBytes int64) string {
+	var fprStr string
+	if f.fileSize > 0 {
+		estLines := f.fileSize / 10
+		if estLines < 1 {
+			estLines = 1
+		}
+		fpr := bloomFPR(sizeBytes, estLines)
+		if fpr < 0.0001 {
+			fprStr = sDim.Render("  FPR < 0.01%")
+		} else {
+			fprStr = sDim.Render(fmt.Sprintf("  FPR ~%.2f%%", fpr*100))
+		}
+	}
+	avail, ok := availableRAM()
+	var ramStr string
+	if ok {
+		if sizeBytes > avail*8/10 {
+			ramStr = sError.Render(fmt.Sprintf("  ⚠ need %s, %s free", humanSize(sizeBytes), humanSize(avail)))
+		} else {
+			ramStr = sDim.Render(fmt.Sprintf("  (%s free)", humanSize(avail)))
+		}
+	}
+	return fprStr + ramStr
+}
+
 func (f filterModel) View(width, maxHeight int) string {
 	header := sHeader.Render("  ⚙️  FILTER CONFIGURATION")
 	file := sDim.Render("  File: " + f.fileName)
@@ -246,9 +304,12 @@ func (f filterModel) View(width, maxHeight int) string {
 			cursor = sPrompt.Render("▸ ")
 		}
 
+		// Derive enabled state (cycle options use choiceIdx)
+		isEnabled := opt.enabled || (opt.cycle && opt.choiceIdx > 0)
+
 		// Checkbox
 		check := sError.Render("☐")
-		if opt.enabled {
+		if isEnabled {
 			check = sSuccess.Render("☑")
 		}
 
@@ -256,7 +317,7 @@ func (f filterModel) View(width, maxHeight int) string {
 		name := opt.name
 		if i == f.cursor && !f.inputing {
 			name = sSelected.Render(name)
-		} else if opt.enabled {
+		} else if isEnabled {
 			name = sSuccess.Render(name)
 		} else {
 			name = sDim.Render(name)
@@ -279,6 +340,19 @@ func (f filterModel) View(width, maxHeight int) string {
 				valStr = sValue.Render(fmt.Sprintf(" [%d]", opt.value))
 			} else {
 				valStr = sDim.Render(" [press Enter to set]")
+			}
+		} else if opt.cycle {
+			choice := ""
+			if opt.choiceIdx < len(opt.choices) {
+				choice = opt.choices[opt.choiceIdx]
+			}
+			arrowStr := fmt.Sprintf(" [← %s →]", choice)
+			if !f.isDeduplicate() {
+				valStr = sDim.Render(arrowStr + "  (enable Deduplicate first)")
+			} else if opt.choiceIdx > 0 && opt.choiceIdx < len(bloomPresets) {
+				valStr = sValue.Render(arrowStr) + f.bloomAnnotation(bloomPresets[opt.choiceIdx])
+			} else {
+				valStr = sDim.Render(arrowStr)
 			}
 		}
 
@@ -330,7 +404,7 @@ func (f filterModel) View(width, maxHeight int) string {
 
 	// Footer
 	lines = append(lines, "")
-	footer := sDim.Render("  [↑↓] Navigate  [Enter/Space] Toggle  [e] Edit value  [Tab] Quick start  [q] Quit")
+	footer := sDim.Render("  [↑↓] Navigate  [Enter/Space] Toggle  [←→] Cycle  [e] Edit value  [Tab] Start  [q] Quit")
 	lines = append(lines, footer)
 
 	return strings.Join(lines, "\n")
