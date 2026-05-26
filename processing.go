@@ -163,21 +163,20 @@ func (pm processingModel) View(width, maxHeight int) string {
 		statusStr = sDim.Render("○ IDLE")
 	}
 
-	// Progress % and ETA (plain files only)
-	var pctStr, etaStr string
+	// ETA (plain files only — % is shown inside the bar itself)
+	var etaStr string
 	if pm.pipeline.fileSize > 0 && !pm.pipeline.isArchive {
-		pct := float64(br) / float64(pm.pipeline.fileSize) * 100
-		if pct > 100 {
-			pct = 100
+		pct := float64(br) / float64(pm.pipeline.fileSize)
+		if pct > 1.0 {
+			pct = 1.0
 		}
-		pctStr = fmt.Sprintf("  %.1f%%", pct)
-		if pm.metrics.currentSpeed > 0 && pct < 99.9 {
+		if pm.metrics.currentSpeed > 0 && pct < 0.999 {
 			remaining := float64(pm.pipeline.fileSize-br) / pm.metrics.currentSpeed
 			etaStr = "  ETA " + formatDuration(time.Duration(remaining)*time.Second)
 		}
 	}
 
-	panel := fmt.Sprintf("  %s%s%s", statusStr, sValue.Render(pctStr), sDim.Render(etaStr))
+	panel := fmt.Sprintf("  %s%s", statusStr, sDim.Render(etaStr))
 	if lr > 0 {
 		var keptPct string
 		if lr > 0 {
@@ -255,8 +254,7 @@ func renderProgressBar(width int, running bool, bytesRead, fileSize int64, isArc
 	}
 
 	if !running && pct >= 1.0 {
-		// Complete — solid bar
-		return sCyan.Render(strings.Repeat("█", width))
+		return barWithLabel(width, width, " 100% ")
 	}
 
 	if !running {
@@ -284,23 +282,34 @@ func renderProgressBar(width int, running bool, bytesRead, fileSize int64, isArc
 		return bar
 	}
 
-	// Plain file: determinate progress
+	// Plain file: determinate progress with centered label
 	filled := int(pct * float64(width))
 	if filled > width {
 		filled = width
 	}
+	return barWithLabel(width, filled, fmt.Sprintf(" %.1f%% ", pct*100))
+}
 
-	bar := sCyan.Render(strings.Repeat("█", filled))
-	remainder := width - filled
-	if remainder > 0 {
-		bar += sDimmer.Render(strings.Repeat("░", remainder))
+// barWithLabel renders a progress bar of the given width with `filled` cyan
+// cells, and overlays label centered inside it.
+func barWithLabel(width, filled int, label string) string {
+	labelLen := len(label)
+	labelStart := (width - labelLen) / 2
+	if labelStart < 0 {
+		labelStart = 0
 	}
-
-	// Append percentage
-	pctStr := fmt.Sprintf(" %.1f%%", pct*100)
-	bar += sDim.Render(pctStr)
-
-	return bar
+	var buf strings.Builder
+	for i := 0; i < width; i++ {
+		li := i - labelStart
+		if li >= 0 && li < labelLen {
+			buf.WriteString(sBarLabel.Render(string(label[li])))
+		} else if i < filled {
+			buf.WriteString(sCyan.Render("█"))
+		} else {
+			buf.WriteString(sDimmer.Render("░"))
+		}
+	}
+	return buf.String()
 }
 
 func humanSpeed(bytesPerSec float64) string {

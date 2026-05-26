@@ -107,3 +107,6 @@ var (
 	progressChars = []string{"░", "▒", "▓", "█"}
 	gradientBar   = []string{"░", "░", "▒", "▒", "▓", "▓", "█", "█"}
 )
+
+// sBarLabel — text overlaid inside a progress bar
+var sBarLabel = lipgloss.NewStyle().Foreground(colorWhite).Bold(true)
