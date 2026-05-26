@@ -114,13 +114,23 @@ func findNameCol(sepLine string) int {
 }
 
 // isSummaryLine detects the post-listing summary row, e.g. "1 files, 0 folders".
-// It must start with a digit to avoid matching filenames that contain "files".
+// The first field must be a plain integer (no dashes — ruling out dates like 2020-01-01)
+// and the second field must be exactly "files", "file", "folders", or "folder".
 func isSummaryLine(trimmed string) bool {
 	if len(trimmed) == 0 || trimmed[0] < '0' || trimmed[0] > '9' {
 		return false
 	}
-	lower := strings.ToLower(trimmed)
-	return strings.Contains(lower, "file") || strings.Contains(lower, "folder")
+	fields := strings.Fields(trimmed)
+	if len(fields) < 2 {
+		return false
+	}
+	for _, c := range fields[0] {
+		if c < '0' || c > '9' {
+			return false // date like "2020-01-01" has dashes → not a summary
+		}
+	}
+	second := strings.ToLower(strings.TrimRight(fields[1], ","))
+	return second == "files" || second == "file" || second == "folders" || second == "folder"
 }
 
 func (ap archivePickerModel) Update(msg tea.Msg) (archivePickerModel, tea.Cmd) {
