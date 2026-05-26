@@ -11,8 +11,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-
-	"github.com/Merovelous/strainer/internal/pipeline"
 )
 
 // Run creates the TUI appModel and starts the BubbleTea program.
@@ -114,11 +112,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		m.isArchive = false
-		if pipeline.IsLikelyBinary(msg.path) {
-			m.browser.err = fmt.Errorf("%s appears to be a binary file — select a plain text wordlist", filepath.Base(msg.path))
-			m.state = stateBrowser
-			return m, nil
-		}
 		m.state = stateFilters
 		m.filters = newFilterModel(filepath.Base(msg.path), m.inputFileSize)
 		return m, nil

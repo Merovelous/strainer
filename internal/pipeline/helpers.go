@@ -2,7 +2,6 @@ package pipeline
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -90,33 +89,6 @@ func HumanSpeed(bytesPerSec float64) string {
 		return fmt.Sprintf("%.1f MB/s", bytesPerSec/(1024*1024))
 	}
 	return fmt.Sprintf("%.2f GB/s", bytesPerSec/(1024*1024*1024))
-}
-
-// IsLikelyBinary returns true if the file looks like binary data.
-// It reads up to 8 KB and checks null-byte density: real binaries (ELF,
-// AppImage, PE) have hundreds of nulls in their headers, while dirty
-// wordlists that happen to contain a few \x00 bytes stay well below the
-// threshold (0.3% ≈ 25 nulls in 8 KB).
-func IsLikelyBinary(path string) bool {
-	f, err := os.Open(path)
-	if err != nil {
-		return false
-	}
-	defer f.Close()
-	buf := make([]byte, 8192)
-	n, _ := f.Read(buf)
-	if n == 0 {
-		return false
-	}
-	var nulls int
-	for _, b := range buf[:n] {
-		if b == 0x00 {
-			nulls++
-		}
-	}
-	// ELF/AppImage/PE headers have 20+ null bytes in the first 64 bytes.
-	// A dirty wordlist with a few \x00 entries will typically have 1–2.
-	return nulls >= 8
 }
 
 // ParseBloomSize parses human size strings like "16g", "2048m" into bytes.

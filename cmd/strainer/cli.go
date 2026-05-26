@@ -87,10 +87,6 @@ func runCLI(f cliFlags) int {
 	}
 
 	isArchive := pipeline.IsArchiveFile(f.input)
-	if !isArchive && pipeline.IsLikelyBinary(f.input) {
-		fmt.Fprintf(os.Stderr, "error: %s appears to be a binary file — strainer only processes plain text wordlists\n", f.input)
-		return 1
-	}
 	if isArchive && f.file == "" {
 		fmt.Fprintln(os.Stderr, "error: --entry is required when input is an archive")
 		return 1
