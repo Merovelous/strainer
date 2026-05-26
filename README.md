@@ -1,5 +1,7 @@
 # strainer
 
+[![CI](https://github.com/Merovelous/strainer/actions/workflows/ci.yml/badge.svg)](https://github.com/Merovelous/strainer/actions/workflows/ci.yml)
+
 A terminal UI for filtering and processing large wordlists. Handles plain files and compressed archives, applies configurable rules, and streams output with live throughput metrics.
 
 ## Why not just use ripgrep or grep?
