@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -16,7 +17,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func newProcessingModel(input, selectedArchiveFile, output string, minLen, maxLen int, asciiOnly bool, isArchive bool) processingModel {
+func newProcessingModel(input, selectedArchiveFile, output string, minLen, maxLen int, asciiOnly bool, isArchive bool, regex *regexp.Regexp, deduplicate bool) processingModel {
 	var fileSize int64
 	if info, err := os.Stat(input); err == nil {
 		fileSize = info.Size()
@@ -33,6 +34,8 @@ func newProcessingModel(input, selectedArchiveFile, output string, minLen, maxLe
 			maxLen:              maxLen,
 			asciiOnly:           asciiOnly,
 			isArchive:           isArchive,
+			regex:               regex,
+			deduplicate:         deduplicate,
 			ctx:                 ctx,
 			cancel:              cancel,
 			done:                make(chan struct{}),
@@ -225,6 +228,12 @@ func (pm processingModel) View(width, maxHeight int) string {
 	if pm.pipeline.asciiOnly {
 		rules = append(rules, "ascii-only")
 	}
+	if pm.pipeline.regex != nil {
+		rules = append(rules, "regex="+pm.pipeline.regex.String())
+	}
+	if pm.pipeline.deduplicate {
+		rules = append(rules, "dedup")
+	}
 	if len(rules) > 0 {
 		lines = append(lines, sDim.Render("  Filters: ")+sSuccess.Render(strings.Join(rules, ", ")))
 	}
@@ -357,6 +366,9 @@ const maxArchiveOutput = 10 << 30
 func (p *pipelineModel) start() {
 	p.startAt = time.Now()
 	p.status = pipeRunning
+	if p.deduplicate {
+		p.seen = make(map[string]struct{})
+	}
 
 	go func() {
 		var runErr error
@@ -435,6 +447,14 @@ func (p *pipelineModel) start() {
 				atomic.AddInt64(&p.linesDropped, 1)
 				continue
 			}
+			if p.deduplicate {
+				key := string(line)
+				if _, exists := p.seen[key]; exists {
+					atomic.AddInt64(&p.linesDropped, 1)
+					continue
+				}
+				p.seen[key] = struct{}{}
+			}
 			atomic.AddInt64(&p.linesKept, 1)
 			writer.Write(line)
 			writer.WriteByte('\n')
@@ -467,6 +487,9 @@ func (p *pipelineModel) filterLine(line []byte) bool {
 				return false
 			}
 		}
+	}
+	if p.regex != nil && !p.regex.Match(line) {
+		return false
 	}
 	return true
 }

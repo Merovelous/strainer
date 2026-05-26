@@ -82,6 +82,12 @@ func (s summaryModel) View(width, maxHeight int) string {
 	if s.asciiOnly {
 		rules = append(rules, "ascii-only")
 	}
+	if s.regexStr != "" {
+		rules = append(rules, "regex="+s.regexStr)
+	}
+	if s.deduplicate {
+		rules = append(rules, "dedup")
+	}
 	if len(rules) > 0 {
 		lines = append(lines, "")
 		lines = append(lines, sDim.Render("  Filters: ")+sSuccess.Render(strings.Join(rules, ", ")))

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"regexp"
 	"time"
 )
 
@@ -38,9 +39,11 @@ type appModel struct {
 	workingDir         string
 
 	// Filter config
-	minLen    int
-	maxLen    int
-	asciiOnly bool
+	minLen      int
+	maxLen      int
+	asciiOnly   bool
+	regexStr    string
+	deduplicate bool
 
 	// Output
 	outputFile string
@@ -97,10 +100,12 @@ type filterModel struct {
 }
 
 type filterOption struct {
-	name    string
-	enabled bool
-	value   int    // 0 = toggle-only
-	dynamic bool   // true = has input field
+	name       string
+	enabled    bool
+	value      int    // numeric value (0 = unset)
+	strValue   string // string value for regex pattern
+	dynamic    bool   // true = numeric input field
+	strDynamic bool   // true = string input field
 }
 
 type metricsModel struct {
@@ -125,6 +130,9 @@ type pipelineModel struct {
 	maxLen              int
 	asciiOnly           bool
 	isArchive           bool
+	regex               *regexp.Regexp
+	deduplicate         bool
+	seen                map[string]struct{}
 
 	// ctx/cancel allow the TUI to stop the goroutine. The goroutine checks
 	// ctx.Done() between lines and cleans up the partial output file on cancel.
@@ -159,11 +167,13 @@ type summaryModel struct {
 	bytesRead    int64
 	bytesWritten int64
 	elapsed      time.Duration
-	minLen       int
-	maxLen       int
-	asciiOnly    bool
-	ready        bool
-	cancelled    bool
+	minLen      int
+	maxLen      int
+	asciiOnly   bool
+	regexStr    string
+	deduplicate bool
+	ready       bool
+	cancelled   bool
 }
 
 type processingModel struct {

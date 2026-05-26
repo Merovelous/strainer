@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sync/atomic"
 	"time"
 
@@ -71,6 +72,8 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					minLen:       m.minLen,
 					maxLen:       m.maxLen,
 					asciiOnly:    m.asciiOnly,
+					regexStr:     m.regexStr,
+					deduplicate:  m.deduplicate,
 					ready:        true,
 					cancelled:    true,
 				}
@@ -111,14 +114,20 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.minLen = m.filters.getMinLen()
 		m.maxLen = m.filters.getMaxLen()
 		m.asciiOnly = m.filters.isASCIIOnly()
+		m.regexStr = m.filters.getRegexStr()
+		m.deduplicate = m.filters.isDeduplicate()
 
 		if _, err := os.Stat(outputName); err == nil {
 			m.state = stateOverwriteConfirm
 			return m, nil
 		}
 
+		var re *regexp.Regexp
+		if m.regexStr != "" {
+			re, _ = regexp.Compile(m.regexStr)
+		}
 		m.state = stateProcessing
-		pm := newProcessingModel(m.inputFile, m.selectedArchiveFile, outputName, m.minLen, m.maxLen, m.asciiOnly, m.isArchive)
+		pm := newProcessingModel(m.inputFile, m.selectedArchiveFile, outputName, m.minLen, m.maxLen, m.asciiOnly, m.isArchive, re, m.deduplicate)
 		m.processing = pm
 		return m, m.processing.Init()
 
@@ -140,6 +149,8 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			minLen:       m.minLen,
 			maxLen:       m.maxLen,
 			asciiOnly:    m.asciiOnly,
+			regexStr:     m.regexStr,
+			deduplicate:  m.deduplicate,
 			ready:        true,
 		}
 		return m, nil
@@ -162,6 +173,8 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			minLen:       m.minLen,
 			maxLen:       m.maxLen,
 			asciiOnly:    m.asciiOnly,
+			regexStr:     m.regexStr,
+			deduplicate:  m.deduplicate,
 			ready:        true,
 		}
 		return m, nil
@@ -196,8 +209,12 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if km, ok := msg.(tea.KeyMsg); ok {
 			switch km.String() {
 			case "y":
+				var re *regexp.Regexp
+				if m.regexStr != "" {
+					re, _ = regexp.Compile(m.regexStr)
+				}
 				m.state = stateProcessing
-				pm := newProcessingModel(m.inputFile, m.selectedArchiveFile, m.outputFile, m.minLen, m.maxLen, m.asciiOnly, m.isArchive)
+				pm := newProcessingModel(m.inputFile, m.selectedArchiveFile, m.outputFile, m.minLen, m.maxLen, m.asciiOnly, m.isArchive, re, m.deduplicate)
 				m.processing = pm
 				return m, m.processing.Init()
 			case "n", "esc":

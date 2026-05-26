@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -13,9 +14,11 @@ func newFilterModel(fileName string) filterModel {
 	return filterModel{
 		fileName: fileName,
 		options: []filterOption{
-			{name: "Min Length", enabled: false, value: 0, dynamic: true},
-			{name: "Max Length", enabled: false, value: 0, dynamic: true},
-			{name: "ASCII Only", enabled: false, value: 0, dynamic: false},
+			{name: "Min Length", dynamic: true},
+			{name: "Max Length", dynamic: true},
+			{name: "ASCII Only"},
+			{name: "Regex Match", strDynamic: true},
+			{name: "Deduplicate"},
 		},
 	}
 }
@@ -36,6 +39,28 @@ func (f filterModel) getMaxLen() int {
 
 func (f filterModel) isASCIIOnly() bool {
 	return f.options[2].enabled
+}
+
+func (f filterModel) getRegex() *regexp.Regexp {
+	if !f.options[3].enabled || f.options[3].strValue == "" {
+		return nil
+	}
+	re, err := regexp.Compile(f.options[3].strValue)
+	if err != nil {
+		return nil
+	}
+	return re
+}
+
+func (f filterModel) getRegexStr() string {
+	if f.options[3].enabled {
+		return f.options[3].strValue
+	}
+	return ""
+}
+
+func (f filterModel) isDeduplicate() bool {
+	return f.options[4].enabled
 }
 
 func (f filterModel) buildOutputName(inputPath string) string {
@@ -67,6 +92,12 @@ func (f filterModel) buildOutputName(inputPath string) string {
 	if f.isASCIIOnly() {
 		suffix += "_ascii"
 	}
+	if f.getRegexStr() != "" {
+		suffix += "_regex"
+	}
+	if f.isDeduplicate() {
+		suffix += "_dedup"
+	}
 	if suffix == "" {
 		suffix = "_filtered"
 	}
@@ -91,15 +122,24 @@ func (f filterModel) Update(msg tea.Msg) (filterModel, tea.Cmd) {
 				return f.confirm()
 			}
 			opt := &f.options[f.cursor]
-			if opt.dynamic && !opt.enabled {
+			switch {
+			case opt.strDynamic && !opt.enabled:
 				opt.enabled = true
 				f.inputing = true
 				f.inputIdx = f.cursor
 				f.inputBuf = ""
-			} else if opt.dynamic && opt.enabled {
+			case opt.strDynamic && opt.enabled:
+				opt.enabled = false
+				opt.strValue = ""
+			case opt.dynamic && !opt.enabled:
+				opt.enabled = true
+				f.inputing = true
+				f.inputIdx = f.cursor
+				f.inputBuf = ""
+			case opt.dynamic && opt.enabled:
 				opt.enabled = false
 				opt.value = 0
-			} else {
+			default:
 				opt.enabled = !opt.enabled
 			}
 		case "e":
@@ -107,7 +147,11 @@ func (f filterModel) Update(msg tea.Msg) (filterModel, tea.Cmd) {
 				return f, nil
 			}
 			opt := &f.options[f.cursor]
-			if opt.dynamic && opt.enabled {
+			if opt.strDynamic && opt.enabled {
+				f.inputing = true
+				f.inputIdx = f.cursor
+				f.inputBuf = opt.strValue
+			} else if opt.dynamic && opt.enabled {
 				f.inputing = true
 				f.inputIdx = f.cursor
 				f.inputBuf = strconv.Itoa(opt.value)
@@ -134,30 +178,58 @@ func (f filterModel) confirm() (filterModel, tea.Cmd) {
 
 func (f filterModel) handleInput(msg tea.KeyMsg) (filterModel, tea.Cmd) {
 	opt := &f.options[f.inputIdx]
+	isStr := opt.strDynamic
 	switch msg.String() {
 	case "enter":
-		val, err := strconv.Atoi(f.inputBuf)
-		if err == nil && val > 0 {
-			opt.value = val
+		if isStr {
+			if f.inputBuf != "" {
+				if _, err := regexp.Compile(f.inputBuf); err != nil {
+					f.validationErr = "invalid regex: " + err.Error()
+					return f, nil
+				}
+				opt.strValue = f.inputBuf
+				f.validationErr = ""
+			} else {
+				opt.enabled = false
+				opt.strValue = ""
+			}
 		} else {
-			opt.enabled = false
-			opt.value = 0
+			val, err := strconv.Atoi(f.inputBuf)
+			if err == nil && val > 0 {
+				opt.value = val
+			} else {
+				opt.enabled = false
+				opt.value = 0
+			}
 		}
 		f.inputing = false
 		f.inputBuf = ""
 	case "esc":
 		f.inputing = false
 		f.inputBuf = ""
-		if opt.value == 0 {
-			opt.enabled = false
+		if isStr {
+			if opt.strValue == "" {
+				opt.enabled = false
+			}
+		} else {
+			if opt.value == 0 {
+				opt.enabled = false
+			}
 		}
 	case "backspace":
 		if len(f.inputBuf) > 0 {
 			f.inputBuf = f.inputBuf[:len(f.inputBuf)-1]
 		}
 	default:
-		if len(msg.String()) == 1 && msg.String() >= "0" && msg.String() <= "9" {
-			f.inputBuf += msg.String()
+		ch := msg.String()
+		if len(ch) == 1 {
+			if isStr {
+				if ch[0] >= 32 && ch[0] < 127 {
+					f.inputBuf += ch
+				}
+			} else if ch >= "0" && ch <= "9" {
+				f.inputBuf += ch
+			}
 		}
 	}
 	return f, nil
@@ -192,7 +264,15 @@ func (f filterModel) View(width, maxHeight int) string {
 
 		// Value
 		valStr := ""
-		if opt.dynamic {
+		if opt.strDynamic {
+			if f.inputing && f.inputIdx == i {
+				valStr = sValue.Render(" [" + f.inputBuf + "█]")
+			} else if opt.enabled && opt.strValue != "" {
+				valStr = sValue.Render(" [" + opt.strValue + "]")
+			} else {
+				valStr = sDim.Render(" [press Enter to set]")
+			}
+		} else if opt.dynamic {
 			if f.inputing && f.inputIdx == i {
 				valStr = sValue.Render(" [" + f.inputBuf + "█]")
 			} else if opt.enabled && opt.value > 0 {
@@ -221,6 +301,12 @@ func (f filterModel) View(width, maxHeight int) string {
 	}
 	if f.isASCIIOnly() {
 		rules = append(rules, "ascii-only")
+	}
+	if f.getRegexStr() != "" {
+		rules = append(rules, "regex")
+	}
+	if f.isDeduplicate() {
+		rules = append(rules, "dedup")
 	}
 	if len(rules) > 0 {
 		lines = append(lines, sDim.Render("  Rules: ")+sSuccess.Render(strings.Join(rules, ", ")))
