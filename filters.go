@@ -82,13 +82,9 @@ func (f filterModel) Update(msg tea.Msg) (filterModel, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "up", "k":
-			if f.cursor > 0 {
-				f.cursor--
-			}
+			f.cursor = (f.cursor - 1 + len(f.options)) % len(f.options)
 		case "down", "j":
-			if f.cursor < len(f.options)-1 {
-				f.cursor++
-			}
+			f.cursor = (f.cursor + 1) % len(f.options)
 		case "enter", " ":
 			opt := &f.options[f.cursor]
 			if opt.dynamic && !opt.enabled {

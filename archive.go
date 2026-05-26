@@ -101,17 +101,19 @@ func (ap archivePickerModel) Update(msg tea.Msg) (archivePickerModel, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "up", "k":
-			if ap.cursor > 0 {
-				ap.cursor--
+			if len(ap.entries) > 0 {
+				ap.cursor = (ap.cursor - 1 + len(ap.entries)) % len(ap.entries)
 				if ap.cursor < ap.offset {
 					ap.offset = ap.cursor
 				}
 			}
 		case "down", "j":
-			if ap.cursor < len(ap.entries)-1 {
-				ap.cursor++
+			if len(ap.entries) > 0 {
+				ap.cursor = (ap.cursor + 1) % len(ap.entries)
 				visible := 20
-				if ap.cursor >= ap.offset+visible {
+				if ap.cursor == 0 {
+					ap.offset = 0
+				} else if ap.cursor >= ap.offset+visible {
 					ap.offset = ap.cursor - visible + 1
 				}
 			}
@@ -129,7 +131,11 @@ func (ap archivePickerModel) Update(msg tea.Msg) (archivePickerModel, tea.Cmd) {
 }
 
 func (ap archivePickerModel) View(maxHeight int) string {
-	header := sHeader.Render("  📦 ARCHIVE CONTENTS")
+	var posStr string
+	if len(ap.entries) > 0 {
+		posStr = sDim.Render(fmt.Sprintf("  %d / %d", ap.cursor+1, len(ap.entries)))
+	}
+	header := sHeader.Render("  📦 ARCHIVE CONTENTS") + posStr
 	archive := sDim.Render("  " + ap.archivePath)
 	lines := []string{"", header, archive, ""}
 

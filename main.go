@@ -10,29 +10,23 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-type appModelMain struct {
-	appModel
-}
-
-func initialModel() appModelMain {
+func initialModel() appModel {
 	wd, _ := os.Getwd()
-	return appModelMain{
-		appModel: appModel{
-			state:      stateBrowser,
-			workingDir: wd,
-			browser:    newBrowserModel(wd),
-		},
+	return appModel{
+		state:      stateBrowser,
+		workingDir: wd,
+		browser:    newBrowserModel(wd),
 	}
 }
 
-func (m appModelMain) Init() tea.Cmd {
+func (m appModel) Init() tea.Cmd {
 	return tea.Batch(
 		m.browser.Init(),
 		tea.WindowSize(),
 	)
 }
 
-func (m appModelMain) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -190,7 +184,7 @@ func (m appModelMain) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m appModelMain) View() string {
+func (m appModel) View() string {
 	if m.quitting {
 		return ""
 	}

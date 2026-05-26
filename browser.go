@@ -90,20 +90,22 @@ func (b browserModel) Update(msg tea.Msg) (browserModel, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "up", "k":
-			if b.cursor > 0 {
-				b.cursor--
+			if len(b.entries) > 0 {
+				b.cursor = (b.cursor - 1 + len(b.entries)) % len(b.entries)
 				if b.cursor < b.offset {
 					b.offset = b.cursor
 				}
 			}
 		case "down", "j":
-			if b.cursor < len(b.entries)-1 {
-				b.cursor++
+			if len(b.entries) > 0 {
+				b.cursor = (b.cursor + 1) % len(b.entries)
 				visible := b.windowHeight - 9
 				if visible < 5 {
 					visible = 20
 				}
-				if b.cursor >= b.offset+visible {
+				if b.cursor == 0 {
+					b.offset = 0
+				} else if b.cursor >= b.offset+visible {
 					b.offset = b.cursor - visible + 1
 				}
 			}
@@ -152,7 +154,11 @@ func (b browserModel) View(maxHeight int) string {
 	}
 
 	// Header
-	header := sHeader.Render("  📁 FILE BROWSER")
+	var posStr string
+	if len(b.entries) > 0 {
+		posStr = sDim.Render(fmt.Sprintf("  %d / %d", b.cursor+1, len(b.entries)))
+	}
+	header := sHeader.Render("  📁 FILE BROWSER") + posStr
 	dir := sDim.Render("  " + b.currentDir)
 	lines := []string{"", header, dir, ""}
 
