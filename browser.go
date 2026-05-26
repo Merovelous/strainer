@@ -92,7 +92,17 @@ func (b browserModel) Update(msg tea.Msg) (browserModel, tea.Cmd) {
 		case "up", "k":
 			if len(b.entries) > 0 {
 				b.cursor = (b.cursor - 1 + len(b.entries)) % len(b.entries)
-				if b.cursor < b.offset {
+				if b.cursor == len(b.entries)-1 {
+					// Wrapped to bottom — scroll viewport to show last entry
+					visible := b.windowHeight - 11
+					if visible < 5 {
+						visible = 5
+					}
+					b.offset = len(b.entries) - visible
+					if b.offset < 0 {
+						b.offset = 0
+					}
+				} else if b.cursor < b.offset {
 					b.offset = b.cursor
 				}
 			}
