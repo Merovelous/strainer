@@ -349,6 +349,9 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%02d:%02d", m, sec)
 }
 
+// maxArchiveOutput guards against archive bombs — stop writing after 10 GiB.
+const maxArchiveOutput = 10 << 30
+
 // --- Pipeline ---
 
 func (p *pipelineModel) start() {
@@ -417,6 +420,10 @@ func (p *pipelineModel) start() {
 			case <-p.ctx.Done():
 				return
 			default:
+			}
+			if p.isArchive && atomic.LoadInt64(&p.bytesWritten) > maxArchiveOutput {
+				runErr = fmt.Errorf("output limit reached (%s) — possible archive bomb", humanSize(maxArchiveOutput))
+				return
 			}
 			atomic.AddInt64(&p.linesRead, 1)
 			line := scanner.Bytes()

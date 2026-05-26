@@ -80,29 +80,32 @@ func (f filterModel) Update(msg tea.Msg) (filterModel, tea.Cmd) {
 		if f.inputing {
 			return f.handleInput(msg)
 		}
+		total := len(f.options) + 1 // +1 for the Start button at the bottom
 		switch msg.String() {
 		case "up", "k":
-			f.cursor = (f.cursor - 1 + len(f.options)) % len(f.options)
+			f.cursor = (f.cursor - 1 + total) % total
 		case "down", "j":
-			f.cursor = (f.cursor + 1) % len(f.options)
+			f.cursor = (f.cursor + 1) % total
 		case "enter", " ":
+			if f.cursor == len(f.options) {
+				return f.confirm()
+			}
 			opt := &f.options[f.cursor]
 			if opt.dynamic && !opt.enabled {
-				// Enable and start input
 				opt.enabled = true
 				f.inputing = true
 				f.inputIdx = f.cursor
 				f.inputBuf = ""
 			} else if opt.dynamic && opt.enabled {
-				// Toggle off
 				opt.enabled = false
 				opt.value = 0
 			} else {
-				// Toggle non-dynamic
 				opt.enabled = !opt.enabled
 			}
 		case "e":
-			// Edit value of current option
+			if f.cursor == len(f.options) {
+				return f, nil
+			}
 			opt := &f.options[f.cursor]
 			if opt.dynamic && opt.enabled {
 				f.inputing = true
@@ -110,20 +113,24 @@ func (f filterModel) Update(msg tea.Msg) (filterModel, tea.Cmd) {
 				f.inputBuf = strconv.Itoa(opt.value)
 			}
 		case "tab":
-			minLen := f.getMinLen()
-			maxLen := f.getMaxLen()
-			if minLen > 0 && maxLen > 0 && minLen > maxLen {
-				f.validationErr = fmt.Sprintf("min length (%d) must be ≤ max length (%d)", minLen, maxLen)
-				return f, nil
-			}
-			f.validationErr = ""
-			return f, func() tea.Msg { return filterConfirmMsg{} }
+			return f.confirm()
 		}
 	}
 	return f, nil
 }
 
 type filterConfirmMsg struct{}
+
+func (f filterModel) confirm() (filterModel, tea.Cmd) {
+	minLen := f.getMinLen()
+	maxLen := f.getMaxLen()
+	if minLen > 0 && maxLen > 0 && minLen > maxLen {
+		f.validationErr = fmt.Sprintf("min length (%d) must be ≤ max length (%d)", minLen, maxLen)
+		return f, nil
+	}
+	f.validationErr = ""
+	return f, func() tea.Msg { return filterConfirmMsg{} }
+}
 
 func (f filterModel) handleInput(msg tea.KeyMsg) (filterModel, tea.Cmd) {
 	opt := &f.options[f.inputIdx]
@@ -221,6 +228,14 @@ func (f filterModel) View(width, maxHeight int) string {
 		lines = append(lines, sWarning.Render("  No filters configured"))
 	}
 
+	// Start button
+	lines = append(lines, "")
+	if f.cursor == len(f.options) && !f.inputing {
+		lines = append(lines, sPrompt.Render("▸ ")+sHighlight.Render(" ▶  Start Processing "))
+	} else {
+		lines = append(lines, sDim.Render("    ▶  Start Processing"))
+	}
+
 	// Validation error
 	if f.validationErr != "" {
 		lines = append(lines, "")
@@ -229,7 +244,7 @@ func (f filterModel) View(width, maxHeight int) string {
 
 	// Footer
 	lines = append(lines, "")
-	footer := sDim.Render("  [↑↓] Navigate  [Enter/Space] Toggle  [e] Edit value  [Tab] Start processing  [q] Quit")
+	footer := sDim.Render("  [↑↓] Navigate  [Enter/Space] Toggle  [e] Edit value  [Tab] Quick start  [q] Quit")
 	lines = append(lines, footer)
 
 	return strings.Join(lines, "\n")
