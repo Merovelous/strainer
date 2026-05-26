@@ -88,14 +88,34 @@ func (pm processingModel) Update(msg tea.Msg, teaProgram *tea.Program) (processi
 			if !pm.metrics.prevCPUTime.IsZero() {
 				elapsed := now.Sub(pm.metrics.prevCPUTime).Seconds()
 				if elapsed > 0 {
+					// CPU delta
 					delta := ticks - pm.metrics.prevCPUTicks
 					pm.metrics.cpuPct = (delta / 100.0 / elapsed / float64(runtime.NumCPU())) * 100.0
+
+					// Rolling EMA speed — alpha=0.3 smooths over ~3 ticks (300ms)
+					const alpha = 0.3
+					curBR := atomic.LoadInt64(&pm.pipeline.bytesRead)
+					curLR := atomic.LoadInt64(&pm.pipeline.linesRead)
+					bSample := float64(curBR-pm.metrics.prevBytesRead) / elapsed
+					lSample := float64(curLR-pm.metrics.prevLinesRead) / elapsed
+					if pm.metrics.currentSpeed == 0 {
+						pm.metrics.currentSpeed = bSample
+						pm.metrics.currentLPS = lSample
+					} else {
+						pm.metrics.currentSpeed = alpha*bSample + (1-alpha)*pm.metrics.currentSpeed
+						pm.metrics.currentLPS = alpha*lSample + (1-alpha)*pm.metrics.currentLPS
+					}
+					pm.metrics.prevBytesRead = curBR
+					pm.metrics.prevLinesRead = curLR
 				}
+			} else {
+				// First tick — seed prev values so next tick gets a clean delta
+				pm.metrics.prevBytesRead = atomic.LoadInt64(&pm.pipeline.bytesRead)
+				pm.metrics.prevLinesRead = atomic.LoadInt64(&pm.pipeline.linesRead)
 			}
 			pm.metrics.prevCPUTicks = ticks
 			pm.metrics.prevCPUTime = now
 			pm.metrics.rssBytes = getRSSBytes()
-			pm.metrics.ioReadBytes, pm.metrics.ioWriteBytes = getIOBytes()
 		}
 		return pm, tea.Every(100*time.Millisecond, func(t time.Time) tea.Msg {
 			return metricsTickMsg{}
@@ -116,17 +136,15 @@ func (pm processingModel) View(width, maxHeight int) string {
 	bw := atomic.LoadInt64(&pm.pipeline.bytesWritten)
 
 	elapsed := time.Since(pm.metrics.startTime)
-	var bytesPerSec float64
+
 	var speed string
-	if elapsed.Seconds() > 0 {
-		bytesPerSec = float64(br) / elapsed.Seconds()
-		speed = humanSpeed(bytesPerSec)
+	if pm.metrics.currentSpeed > 0 {
+		speed = humanSpeed(pm.metrics.currentSpeed)
 	}
 
 	var linesPerSec string
-	if elapsed.Seconds() > 0 {
-		lps := float64(lr) / elapsed.Seconds()
-		linesPerSec = fmt.Sprintf("%.0f lines/s", lps)
+	if pm.metrics.currentLPS > 0 {
+		linesPerSec = fmt.Sprintf("%.0f lines/s", pm.metrics.currentLPS)
 	}
 
 	var statusStr string
@@ -153,8 +171,8 @@ func (pm processingModel) View(width, maxHeight int) string {
 			pct = 100
 		}
 		pctStr = fmt.Sprintf("  %.1f%%", pct)
-		if bytesPerSec > 0 && pct < 99.9 {
-			remaining := float64(pm.pipeline.fileSize-br) / bytesPerSec
+		if pm.metrics.currentSpeed > 0 && pct < 99.9 {
+			remaining := float64(pm.pipeline.fileSize-br) / pm.metrics.currentSpeed
 			etaStr = "  ETA " + formatDuration(time.Duration(remaining)*time.Second)
 		}
 	}
@@ -184,7 +202,7 @@ func (pm processingModel) View(width, maxHeight int) string {
 		sDim.Render(linesPerSec))
 	panel += fmt.Sprintf("\n  Elapsed: %s", sValue.Render(formatDuration(elapsed)))
 
-	if pm.pipeline.status == pipeRunning {
+	if pm.pipeline.status == pipeRunning && (pm.metrics.cpuPct > 0 || pm.metrics.rssBytes > 0) {
 		panel += fmt.Sprintf("\n  CPU: %.1f%%  RAM: %s",
 			pm.metrics.cpuPct,
 			humanSize(pm.metrics.rssBytes))
@@ -449,60 +467,6 @@ func (cr *atomicCounterReader) Read(p []byte) (int, error) {
 		atomic.AddInt64(cr.bytesRead, int64(n))
 	}
 	return n, err
-}
-
-// --- System Metrics ---
-
-func getCPURawTicks() float64 {
-	data, err := os.ReadFile("/proc/self/stat")
-	if err != nil {
-		return 0
-	}
-	fields := strings.Fields(string(data))
-	if len(fields) < 15 {
-		return 0
-	}
-	utime, _ := strconv.ParseFloat(fields[13], 64)
-	stime, _ := strconv.ParseFloat(fields[14], 64)
-	return utime + stime
-}
-
-func getRSSBytes() int64 {
-	data, err := os.ReadFile("/proc/self/status")
-	if err != nil {
-		return 0
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(line, "VmRSS:") {
-			fields := strings.Fields(line)
-			if len(fields) >= 2 {
-				kb, _ := strconv.ParseInt(fields[1], 10, 64)
-				return kb * 1024
-			}
-		}
-	}
-	return 0
-}
-
-func getIOBytes() (read int64, write int64) {
-	data, err := os.ReadFile("/proc/self/io")
-	if err != nil {
-		return 0, 0
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(line, "read_bytes:") {
-			fields := strings.Fields(line)
-			if len(fields) >= 2 {
-				read, _ = strconv.ParseInt(fields[1], 10, 64)
-			}
-		} else if strings.HasPrefix(line, "write_bytes:") {
-			fields := strings.Fields(line)
-			if len(fields) >= 2 {
-				write, _ = strconv.ParseInt(fields[1], 10, 64)
-			}
-		}
-	}
-	return read, write
 }
 
 func runCommand(name string, args ...string) (string, error) {

@@ -106,10 +106,13 @@ type metricsModel struct {
 	startTime    time.Time
 	cpuPct       float64
 	rssBytes     int64
-	ioReadBytes  int64
-	ioWriteBytes int64
 	prevCPUTicks float64
 	prevCPUTime  time.Time
+	// rolling EMA throughput — updated each metrics tick
+	currentSpeed  float64
+	currentLPS    float64
+	prevBytesRead int64
+	prevLinesRead int64
 }
 
 type pipelineModel struct {
