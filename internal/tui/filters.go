@@ -493,8 +493,7 @@ func (f filterModel) View(width, maxHeight int) string {
 
 		row := cur + indentPfx + styledName + strings.Repeat(" ", pad) + f.renderOptValue(i)
 		if focused && i < len(optHints) {
-			hint := sDimmer.Render("       " + optHints[i])
-			return []string{row, hint}
+			row += sHint.Render("   " + optHints[i])
 		}
 		return []string{row}
 	}

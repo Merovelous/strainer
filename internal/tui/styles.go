@@ -95,6 +95,9 @@ var (
 		Foreground(colorCyan).
 		Bold(true)
 
+	// Inline option hint (shown next to focused filter row).
+	sHint = lipgloss.NewStyle().Foreground(lipgloss.Color("#5a8a8a"))
+
 	// Step indicator styles.
 	sStepDone   = lipgloss.NewStyle().Foreground(colorGreen)
 	sStepActive = lipgloss.NewStyle().Foreground(colorCyan).Bold(true)
