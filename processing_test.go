@@ -175,9 +175,6 @@ func TestPipelineIntegration(t *testing.T) {
 		done:        make(chan struct{}),
 		ready:       true,
 	}
-	if p.deduplicate {
-		p.seen = make(map[string]struct{})
-	}
 
 	p.start()
 	<-p.done
@@ -332,6 +329,65 @@ func TestCommaFmt(t *testing.T) {
 		if got := commaFmt(tt.n); got != tt.want {
 			t.Errorf("commaFmt(%d) = %q, want %q", tt.n, got, tt.want)
 		}
+	}
+}
+
+// TestMmapDedup verifies that the mmap-based dedup path produces byte-identical
+// output to the expected unique-line set. Skipped on platforms where mmap dedup
+// is unavailable (Windows).
+func TestMmapDedup(t *testing.T) {
+	input := filepath.Join(t.TempDir(), "input.txt")
+	output := filepath.Join(t.TempDir(), "output.txt")
+
+	content := "apple\nbanana\napple\ncherry\nbanana\ndate\napple\n"
+	if err := os.WriteFile(input, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := os.Stat(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !canMmapDedup(info.Size()) {
+		t.Skip("mmap dedup not supported on this platform")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	p := &pipelineModel{
+		inputFile:   input,
+		outputFile:  output,
+		fileSize:    info.Size(),
+		deduplicate: true,
+		ctx:         ctx,
+		cancel:      cancel,
+		done:        make(chan struct{}),
+		ready:       true,
+	}
+
+	p.start()
+	<-p.done
+
+	if p.err != nil {
+		t.Fatalf("pipeline error: %v", p.err)
+	}
+
+	got, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := "apple\nbanana\ncherry\ndate\n"
+	if string(got) != want {
+		t.Errorf("mmap dedup output =\n%q\nwant\n%q", string(got), want)
+	}
+	if p.linesRead != 7 {
+		t.Errorf("linesRead = %d, want 7", p.linesRead)
+	}
+	if p.linesKept != 4 {
+		t.Errorf("linesKept = %d, want 4", p.linesKept)
+	}
+	if p.linesDropped != 3 {
+		t.Errorf("linesDropped = %d, want 3", p.linesDropped)
 	}
 }
 

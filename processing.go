@@ -366,7 +366,9 @@ const maxArchiveOutput = 10 << 30
 func (p *pipelineModel) start() {
 	p.startAt = time.Now()
 	p.status = pipeRunning
-	if p.deduplicate {
+	// seen map is only needed for the scanner-based fallback dedup path
+	// (archives and Windows). Plain files on Linux/macOS use mmapDedup instead.
+	if p.deduplicate && (p.isArchive || !canMmapDedup(p.fileSize)) {
 		p.seen = make(map[string]struct{})
 	}
 
@@ -410,6 +412,22 @@ func (p *pipelineModel) start() {
 				return
 			}
 			defer f.Close()
+
+			if p.deduplicate && canMmapDedup(p.fileSize) {
+				outFile, err := os.OpenFile(p.outputFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+				if err != nil {
+					runErr = err
+					return
+				}
+				defer outFile.Close()
+				w := bufio.NewWriterSize(outFile, 256*1024)
+				runErr = mmapDedup(p, f, p.fileSize, w)
+				if runErr == nil && p.ctx.Err() == nil {
+					w.Flush()
+				}
+				return
+			}
+
 			reader = f
 		}
 
