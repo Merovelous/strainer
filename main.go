@@ -304,6 +304,11 @@ func (m appModel) View() string {
 var globalTeaProgram *tea.Program
 
 func main() {
+	flags, isCLI := parseFlags()
+	if isCLI {
+		os.Exit(runCLI(flags))
+	}
+
 	m := initialModel()
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	globalTeaProgram = p
