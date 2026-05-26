@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -16,7 +17,6 @@ func newFilterModel(fileName string) filterModel {
 			{name: "Max Length", enabled: false, value: 0, dynamic: true},
 			{name: "ASCII Only", enabled: false, value: 0, dynamic: false},
 		},
-		ready: true,
 	}
 }
 
@@ -39,9 +39,7 @@ func (f filterModel) isASCIIOnly() bool {
 }
 
 func (f filterModel) buildOutputName(inputPath string) string {
-	// Get just the filename from path
-	parts := strings.Split(inputPath, "/")
-	base := parts[len(parts)-1]
+	base := filepath.Base(inputPath)
 
 	// Strip any extension (archive or regular)
 	// Check compound archive extensions first
@@ -74,10 +72,6 @@ func (f filterModel) buildOutputName(inputPath string) string {
 	}
 
 	return base + suffix + ".txt"
-}
-
-func (f filterModel) Init() tea.Cmd {
-	return func() tea.Msg { return filterReadyMsg{} }
 }
 
 func (f filterModel) Update(msg tea.Msg) (filterModel, tea.Cmd) {
@@ -120,10 +114,14 @@ func (f filterModel) Update(msg tea.Msg) (filterModel, tea.Cmd) {
 				f.inputBuf = strconv.Itoa(opt.value)
 			}
 		case "tab":
-			// Confirm and move to processing
-			return f, func() tea.Msg {
-				return filterConfirmMsg{}
+			minLen := f.getMinLen()
+			maxLen := f.getMaxLen()
+			if minLen > 0 && maxLen > 0 && minLen > maxLen {
+				f.validationErr = fmt.Sprintf("min length (%d) must be ≤ max length (%d)", minLen, maxLen)
+				return f, nil
 			}
+			f.validationErr = ""
+			return f, func() tea.Msg { return filterConfirmMsg{} }
 		}
 	}
 	return f, nil
@@ -225,6 +223,12 @@ func (f filterModel) View(width, maxHeight int) string {
 		lines = append(lines, sDim.Render("  Rules: ")+sSuccess.Render(strings.Join(rules, ", ")))
 	} else {
 		lines = append(lines, sWarning.Render("  No filters configured"))
+	}
+
+	// Validation error
+	if f.validationErr != "" {
+		lines = append(lines, "")
+		lines = append(lines, sError.Render("  ✖ "+f.validationErr))
 	}
 
 	// Footer

@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -15,8 +14,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 )
-
-var asciiRegex = regexp.MustCompile(`^[\x20-\x7E]+$`)
 
 func newProcessingModel(input, output string, minLen, maxLen int, asciiOnly bool, isArchive bool) processingModel {
 	// Get source file size for progress bar
@@ -71,20 +68,28 @@ func (pm processingModel) Update(msg tea.Msg, teaProgram *tea.Program) (processi
 		return pm, nil
 
 	case metricsTickMsg:
-		if pm.pipeline.status == pipeRunning {
+		switch pm.pipeline.status {
+		case pipeRunning:
 			pm.metrics.cpuPct = getCPUTimePercent()
 			pm.metrics.rssBytes = getRSSBytes()
 			pm.metrics.ioReadBytes, pm.metrics.ioWriteBytes = getIOBytes()
 			return pm, tea.Every(100*time.Millisecond, func(t time.Time) tea.Msg {
 				return metricsTickMsg{}
 			})
-		}
-		return pm, nil
-
-	case tea.KeyMsg:
-		if msg.String() == "q" || msg.String() == "ctrl+c" {
-			pm.pipeline.status = pipeDone
-			return pm, tea.Quit
+		case pipeDone:
+			if pm.pipeline.err != nil {
+				err := pm.pipeline.err
+				return pm, func() tea.Msg { return pipeErrMsg{err: err} }
+			}
+			return pm, func() tea.Msg { return pipeDoneMsg{} }
+		case pipeError:
+			err := pm.pipeline.err
+			return pm, func() tea.Msg { return pipeErrMsg{err: err} }
+		default:
+			// pipeIdle — pipeline not yet started, keep ticking
+			return pm, tea.Every(100*time.Millisecond, func(t time.Time) tea.Msg {
+				return metricsTickMsg{}
+			})
 		}
 	}
 	return pm, nil
@@ -201,12 +206,17 @@ func renderProgressBar(width int, running bool, bytesRead, fileSize int64, isArc
 		return sDimmer.Render(strings.Repeat("░", width))
 	}
 
-	// Archive: indeterminate pulsing bar
+	// Archive: animated indeterminate bar — lit segment sweeps left to right
 	if isArchive {
-		half := width / 2
+		segWidth := width / 3
+		if segWidth < 4 {
+			segWidth = 4
+		}
+		tick := int(time.Now().UnixMilli() / 100)
+		start := tick % (width + segWidth) - segWidth
 		bar := ""
 		for i := 0; i < width; i++ {
-			if i < half {
+			if i >= start && i < start+segWidth {
 				idx := i % len(gradientBar)
 				bar += sCyan.Render(gradientBar[idx])
 			} else {
@@ -276,6 +286,7 @@ func formatDuration(d time.Duration) string {
 // --- Pipeline ---
 
 func (p *pipelineModel) start() {
+	p.startAt = time.Now()
 	p.status = pipeRunning
 
 	go func() {
@@ -311,7 +322,7 @@ func (p *pipelineModel) start() {
 
 		cr := &atomicCounterReader{r: reader, bytesRead: &p.bytesRead}
 
-		outFile, err := os.Create(p.outputFile)
+		outFile, err := os.OpenFile(p.outputFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 		if err != nil {
 			p.err = err
 			p.status = pipeError
@@ -338,13 +349,17 @@ func (p *pipelineModel) start() {
 			atomic.AddInt64(&p.linesKept, 1)
 			writer.Write(line)
 			writer.WriteByte('\n')
+			atomic.AddInt64(&p.bytesWritten, int64(len(line))+1)
+		}
+
+		if err := scanner.Err(); err != nil {
+			p.err = err
+			p.finishAt = time.Now()
+			p.status = pipeError
+			return
 		}
 
 		writer.Flush()
-		if info, err := outFile.Stat(); err == nil {
-			atomic.StoreInt64(&p.bytesWritten, info.Size())
-		}
-
 		p.finishAt = time.Now()
 		p.status = pipeDone
 	}()

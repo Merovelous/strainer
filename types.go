@@ -50,13 +50,12 @@ type appModel struct {
 }
 
 type browserModel struct {
-	entries      []entry
-	cursor       int
-	offset       int
-	currentDir   string
-	selectedFile string
-	err          error
-	ready        bool
+	entries    []entry
+	cursor     int
+	offset     int
+	currentDir string
+	err        error
+	ready      bool
 }
 
 type entry struct {
@@ -68,13 +67,12 @@ type entry struct {
 }
 
 type archivePickerModel struct {
-	entries []archiveEntry
-	cursor  int
-	offset  int
+	entries     []archiveEntry
+	cursor      int
+	offset      int
 	archivePath string
-	loading bool
-	err     error
-	done    bool
+	loading     bool
+	err         error
 }
 
 type archiveEntry struct {
@@ -83,13 +81,13 @@ type archiveEntry struct {
 }
 
 type filterModel struct {
-	options  []filterOption
-	cursor   int
-	inputing bool
-	inputBuf string
-	inputIdx int
-	fileName string
-	ready    bool
+	options       []filterOption
+	cursor        int
+	inputing      bool
+	inputBuf      string
+	inputIdx      int
+	fileName      string
+	validationErr string
 }
 
 type filterOption struct {
@@ -100,16 +98,9 @@ type filterOption struct {
 }
 
 type metricsModel struct {
-	status     pipeStatus
-	startTime  time.Time
-
-	// CPU
-	cpuPct     float64
-
-	// Memory
-	rssBytes   int64
-
-	// IO
+	startTime    time.Time
+	cpuPct       float64
+	rssBytes     int64
 	ioReadBytes  int64
 	ioWriteBytes int64
 }
@@ -160,13 +151,12 @@ type processingModel struct {
 
 // Message types
 type (
-	browserReadyMsg   struct{}
-	browserSelectMsg  struct{ path string; isArchive bool }
-	archiveReadyMsg   struct{ entries []archiveEntry; err error }
-	archiveSelectMsg  struct{ file string }
-	filterReadyMsg    struct{}
-	pipeReadyMsg      struct{}
-	pipeDoneMsg       struct{}
-	pipeErrMsg        struct{ err error }
-	metricsTickMsg    struct{}
+	browserReadyMsg  struct{ entries []entry; err error }
+	browserSelectMsg struct{ path string; isArchive bool }
+	archiveReadyMsg  struct{ entries []archiveEntry; err error }
+	archiveSelectMsg struct{ file string }
+	pipeReadyMsg     struct{}
+	pipeDoneMsg      struct{}
+	pipeErrMsg       struct{ err error }
+	metricsTickMsg   struct{}
 )

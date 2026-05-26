@@ -33,16 +33,17 @@ func newBrowserModel(dir string) browserModel {
 }
 
 func (b browserModel) Init() tea.Cmd {
+	dir := b.currentDir
 	return func() tea.Msg {
-		_ = listEntries(b.currentDir)
-		return browserReadyMsg{}
+		entries, err := listEntries(dir)
+		return browserReadyMsg{entries: entries, err: err}
 	}
 }
 
-func listEntries(dir string) []entry {
+func listEntries(dir string) ([]entry, error) {
 	dirEntries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 
 	var entries []entry
@@ -66,7 +67,6 @@ func listEntries(dir string) []entry {
 		entries = append(entries, e)
 	}
 
-	// Sort: dirs first, then files, alphabetically
 	sort.Slice(entries, func(i, j int) bool {
 		if entries[i].isDir != entries[j].isDir {
 			return entries[i].isDir
@@ -74,13 +74,14 @@ func listEntries(dir string) []entry {
 		return strings.ToLower(entries[i].name) < strings.ToLower(entries[j].name)
 	})
 
-	return entries
+	return entries, nil
 }
 
 func (b browserModel) Update(msg tea.Msg) (browserModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case browserReadyMsg:
-		b.entries = listEntries(b.currentDir)
+		b.err = msg.err
+		b.entries = msg.entries
 		b.cursor = 0
 		b.offset = 0
 		b.ready = true
@@ -113,10 +114,11 @@ func (b browserModel) Update(msg tea.Msg) (browserModel, tea.Cmd) {
 				b.cursor = 0
 				b.offset = 0
 				b.entries = nil
+				b.err = nil
+				dir := e.path
 				return b, func() tea.Msg {
-					entries := listEntries(e.path)
-					_ = entries
-					return browserReadyMsg{}
+					entries, err := listEntries(dir)
+					return browserReadyMsg{entries: entries, err: err}
 				}
 			}
 			// File selected
@@ -130,10 +132,10 @@ func (b browserModel) Update(msg tea.Msg) (browserModel, tea.Cmd) {
 				b.cursor = 0
 				b.offset = 0
 				b.entries = nil
+				b.err = nil
 				return b, func() tea.Msg {
-					entries := listEntries(parent)
-					_ = entries
-					return browserReadyMsg{}
+					entries, err := listEntries(parent)
+					return browserReadyMsg{entries: entries, err: err}
 				}
 			}
 		}
@@ -191,7 +193,9 @@ func (b browserModel) View(maxHeight int) string {
 		lines = append(lines, line)
 	}
 
-	if len(b.entries) == 0 {
+	if b.err != nil {
+		lines = append(lines, sError.Render("  Error: "+b.err.Error()))
+	} else if len(b.entries) == 0 {
 		lines = append(lines, sDim.Render("  (empty directory)"))
 	}
 

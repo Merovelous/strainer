@@ -91,7 +91,6 @@ func (ap archivePickerModel) Update(msg tea.Msg) (archivePickerModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case archiveReadyMsg:
 		ap.loading = false
-		ap.done = true
 		ap.entries = msg.entries
 		ap.err = msg.err
 		return ap, nil

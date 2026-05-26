@@ -55,6 +55,24 @@ func (m appModelMain) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case stateFilters:
 				m.state = stateBrowser
 				return m, nil
+			case stateProcessing:
+				p := m.processing.pipeline
+				m.state = stateSummary
+				m.summary = summaryModel{
+					inputFile:    m.inputFile,
+					outputFile:   m.outputFile,
+					linesRead:    p.linesRead,
+					linesKept:    p.linesKept,
+					linesDropped: p.linesDropped,
+					bytesRead:    p.bytesRead,
+					bytesWritten: p.bytesWritten,
+					elapsed:      time.Since(p.startAt),
+					minLen:       m.minLen,
+					maxLen:       m.maxLen,
+					asciiOnly:    m.asciiOnly,
+					ready:        true,
+				}
+				return m, nil
 			case stateSummary:
 				m.quitting = true
 				return m, tea.Quit
