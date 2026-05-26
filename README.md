@@ -48,7 +48,7 @@ That said — if you already have the file path, the filter as a regex, and you 
 ## Install
 
 ```bash
-git clone https://github.com/yourname/strainer
+git clone https://github.com/Merovelous/strainer
 cd strainer
 go build -o strainer .
 ```
@@ -56,7 +56,7 @@ go build -o strainer .
 Or install directly:
 
 ```bash
-go install github.com/yourname/strainer@latest
+go install github.com/Merovelous/strainer@latest
 ```
 
 ---

@@ -1,4 +1,4 @@
-module strainer
+module github.com/Merovelous/strainer
 
 go 1.24.0
 
