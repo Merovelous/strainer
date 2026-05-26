@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"runtime"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -22,6 +23,7 @@ type cliFlags struct {
 	regexStr string
 	dedup    bool
 	quiet    bool
+	jobs     int
 }
 
 // parseFlags parses CLI flags and returns them plus whether CLI mode is active.
@@ -37,6 +39,7 @@ func parseFlags() (cliFlags, bool) {
 	flag.StringVar(&f.regexStr, "regex", "", "keep lines matching `pattern`")
 	flag.BoolVar(&f.dedup, "dedup", false, "deduplicate lines")
 	flag.BoolVar(&f.quiet, "quiet", false, "suppress progress output (errors still printed)")
+	flag.IntVar(&f.jobs, "jobs", 0, "parallel filter workers (0 = auto, 1 = single-core)")
 	flag.Parse()
 	return f, f.input != ""
 }
@@ -72,6 +75,14 @@ func runCLI(f cliFlags) int {
 		fileSize = info.Size()
 	}
 
+	jobs := f.jobs
+	if jobs <= 0 {
+		jobs = runtime.NumCPU()
+	}
+	if f.dedup {
+		jobs = 1
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -94,6 +105,7 @@ func runCLI(f cliFlags) int {
 		isArchive:           isArchive,
 		regex:               re,
 		deduplicate:         f.dedup,
+		jobs:                jobs,
 		ctx:                 ctx,
 		cancel:              cancel,
 		done:                make(chan struct{}),

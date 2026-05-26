@@ -127,7 +127,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			re, _ = regexp.Compile(m.regexStr)
 		}
 		m.state = stateProcessing
-		pm := newProcessingModel(m.inputFile, m.selectedArchiveFile, outputName, m.minLen, m.maxLen, m.asciiOnly, m.isArchive, re, m.deduplicate)
+		pm := newProcessingModel(m.inputFile, m.selectedArchiveFile, outputName, m.minLen, m.maxLen, m.asciiOnly, m.isArchive, re, m.deduplicate, 0)
 		m.processing = pm
 		return m, m.processing.Init()
 
@@ -214,7 +214,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					re, _ = regexp.Compile(m.regexStr)
 				}
 				m.state = stateProcessing
-				pm := newProcessingModel(m.inputFile, m.selectedArchiveFile, m.outputFile, m.minLen, m.maxLen, m.asciiOnly, m.isArchive, re, m.deduplicate)
+				pm := newProcessingModel(m.inputFile, m.selectedArchiveFile, m.outputFile, m.minLen, m.maxLen, m.asciiOnly, m.isArchive, re, m.deduplicate, 0)
 				m.processing = pm
 				return m, m.processing.Init()
 			case "n", "esc":

@@ -36,7 +36,8 @@ That said — if you already have the file path, the filter as a regex, and you 
 - **Live metrics** — throughput, lines read/kept/dropped, CPU%, RAM (RSS), I/O bytes
 - **Progress bar** — determinate for plain files, indeterminate for archives
 - **Smart output naming** — filename derived from source and active filters
-- **CLI mode** — `--input`, `--output`, `--min`, `--max`, `--ascii`, `--regex`, `--dedup` flags for scripting
+- **Multi-core filtering** — parallel workers with `--jobs N` (default: all cores); output order preserved
+- **CLI mode** — `--input`, `--output`, `--min`, `--max`, `--ascii`, `--regex`, `--dedup`, `--jobs` flags for scripting
 - **Single binary** — no runtime dependencies beyond `7z` for archive extraction
 
 ---
@@ -121,13 +122,23 @@ done
 
 ## Pipeline
 
-Processing uses a single-goroutine, zero-allocation pipeline:
+**Single-core** (default when `--dedup` is active or `--jobs 1`):
 
 ```
 source (file or 7z stdout)
   → bufio.Scanner (64 KB buffer, 1 MB max line)
   → filterLine()  (byte-level checks, no string allocation)
   → bufio.Writer  (256 KB write buffer)
+  → output file
+```
+
+**Multi-core** (default for non-dedup workloads, `--jobs N` or 0 for auto):
+
+```
+source
+  → readChunks()  (4 MB blocks, newline-aligned, sequence-numbered)
+  → N worker goroutines  (each runs filterLine on its chunk)
+  → writeOrdered()  (min-heap reorders by sequence, writes in order)
   → output file
 ```
 
@@ -151,20 +162,21 @@ Filters combine: a line must pass all enabled checks to be written to output.
 
 ## Performance
 
-Task: filter a 10 GB synthetic wordlist (859 M lines) — keep lines where length is 8–12 **and** all bytes are printable ASCII `[\x20-\x7E]`. 40% of lines pass the filter.
+Task: filter a 9.8 GB synthetic wordlist (859 M lines) — keep lines where length is 8–12 **and** all bytes are printable ASCII `[\x20-\x7E]`. 40% of lines pass the filter.
 
 | Tool | Command | Time | Throughput |
 |---|---|---|---|
-| **strainer** | `strainer --input bench.txt --min 8 --max 12 --ascii --output /dev/null --quiet` | **28.8 s** | **~347 MB/s** |
+| **strainer (16 cores)** | `strainer --input bench.txt --min 8 --max 12 --ascii --output /dev/null --quiet` | **26.3 s** | **~372 MB/s** |
+| **strainer (1 core)** | `strainer ... --jobs 1` | **47.7 s** | **~205 MB/s** |
 | ripgrep 15.1 | `rg '^[\x20-\x7E]{8,12}$' bench.txt > /dev/null` | 51.4 s | ~194 MB/s |
 
-**strainer is ~1.8× faster than ripgrep** on this workload.
+**strainer (multi-core) is ~2× faster than ripgrep** on this workload.
 
 Why strainer wins here:
 - `filterLine` works on `[]byte` directly — no string allocation per line
 - Length check = two integer comparisons; ASCII check = one byte-range loop — no regex engine overhead
-- 256 KB write buffer — batched `write()` syscalls
-- Single goroutine: read → filter → write, no channel hops
+- 4 MB read chunks — optimal for sequential I/O, fewer syscalls
+- N worker goroutines filter chunks in parallel; output order is preserved via sequence numbers + min-heap
 
 ripgrep pays per-line cost for regex compilation context, UTF-8 validation, and match extraction even when the filter is trivially simple.
 

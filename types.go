@@ -134,6 +134,8 @@ type pipelineModel struct {
 	deduplicate         bool
 	seen                map[string]struct{}
 
+	jobs int // parallel filter workers; 1 = single-core, >1 = multi-core
+
 	// ctx/cancel allow the TUI to stop the goroutine. The goroutine checks
 	// ctx.Done() between lines and cleans up the partial output file on cancel.
 	ctx    context.Context

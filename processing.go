@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"container/heap"
 	"context"
 	"fmt"
 	"io"
@@ -11,13 +13,21 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func newProcessingModel(input, selectedArchiveFile, output string, minLen, maxLen int, asciiOnly bool, isArchive bool, regex *regexp.Regexp, deduplicate bool) processingModel {
+func newProcessingModel(input, selectedArchiveFile, output string, minLen, maxLen int, asciiOnly bool, isArchive bool, regex *regexp.Regexp, deduplicate bool, jobs int) processingModel {
+	if jobs <= 0 {
+		jobs = runtime.NumCPU()
+	}
+	if deduplicate {
+		jobs = 1 // dedup uses shared state — must stay single-core
+	}
+
 	var fileSize int64
 	if info, err := os.Stat(input); err == nil {
 		fileSize = info.Size()
@@ -36,6 +46,7 @@ func newProcessingModel(input, selectedArchiveFile, output string, minLen, maxLe
 			isArchive:           isArchive,
 			regex:               regex,
 			deduplicate:         deduplicate,
+			jobs:                jobs,
 			ctx:                 ctx,
 			cancel:              cancel,
 			done:                make(chan struct{}),
@@ -237,6 +248,9 @@ func (pm processingModel) View(width, maxHeight int) string {
 	if len(rules) > 0 {
 		lines = append(lines, sDim.Render("  Filters: ")+sSuccess.Render(strings.Join(rules, ", ")))
 	}
+	if pm.pipeline.jobs > 1 {
+		lines = append(lines, sDim.Render("  Workers: ")+sValue.Render(fmt.Sprintf("%d cores", pm.pipeline.jobs)))
+	}
 
 	lines = append(lines, "")
 	if pm.pipeline.status == pipeDone || pm.pipeline.status == pipeError {
@@ -361,6 +375,9 @@ func formatDuration(d time.Duration) string {
 // maxArchiveOutput guards against archive bombs — stop writing after 10 GiB.
 const maxArchiveOutput = 10 << 30
 
+// parallelChunkSize is the target read size per worker chunk.
+const parallelChunkSize = 4 * 1024 * 1024
+
 // --- Pipeline ---
 
 func (p *pipelineModel) start() {
@@ -375,7 +392,6 @@ func (p *pipelineModel) start() {
 		defer func() {
 			p.finishAt = time.Now()
 			if p.ctx.Err() != nil {
-				// User cancelled — delete the partial output file.
 				os.Remove(p.outputFile)
 				p.err = nil
 			} else {
@@ -390,7 +406,6 @@ func (p *pipelineModel) start() {
 			if p.selectedArchiveFile != "" {
 				args = append(args, p.selectedArchiveFile)
 			}
-			// CommandContext kills the 7z process when ctx is cancelled.
 			cmd := exec.CommandContext(p.ctx, sevenZipBin, args...)
 			stdout, err := cmd.StdoutPipe()
 			if err != nil {
@@ -413,8 +428,6 @@ func (p *pipelineModel) start() {
 			reader = f
 		}
 
-		cr := &atomicCounterReader{r: reader, bytesRead: &p.bytesRead}
-
 		outFile, err := os.OpenFile(p.outputFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 		if err != nil {
 			runErr = err
@@ -423,56 +436,233 @@ func (p *pipelineModel) start() {
 		defer outFile.Close()
 
 		writer := bufio.NewWriterSize(outFile, 256*1024)
-		scanner := bufio.NewScanner(cr)
-		buf := make([]byte, 0, 64*1024)
-		scanner.Buffer(buf, 1024*1024)
 
-		for scanner.Scan() {
-			select {
-			case <-p.ctx.Done():
-				return
-			default:
-			}
-			if p.isArchive && atomic.LoadInt64(&p.bytesWritten) > maxArchiveOutput {
-				runErr = fmt.Errorf("output limit reached (%s) — possible archive bomb", humanSize(maxArchiveOutput))
-				return
-			}
-			atomic.AddInt64(&p.linesRead, 1)
-			line := scanner.Bytes()
-			// Strip Windows CRLF — Scanner splits on \n but leaves \r on the token.
-			if len(line) > 0 && line[len(line)-1] == '\r' {
-				line = line[:len(line)-1]
-			}
-			if !p.filterLine(line) {
-				atomic.AddInt64(&p.linesDropped, 1)
-				continue
-			}
-			if p.deduplicate {
-				key := string(line)
-				if _, exists := p.seen[key]; exists {
-					atomic.AddInt64(&p.linesDropped, 1)
-					continue
-				}
-				p.seen[key] = struct{}{}
-			}
-			atomic.AddInt64(&p.linesKept, 1)
-			writer.Write(line)
-			writer.WriteByte('\n')
-			atomic.AddInt64(&p.bytesWritten, int64(len(line))+1)
+		if p.jobs > 1 {
+			runErr = p.runMultiCore(reader, writer)
+		} else {
+			runErr = p.runSingleCore(reader, writer)
 		}
 
-		if err := scanner.Err(); err != nil {
-			if p.ctx.Err() == nil {
-				runErr = err
-			}
-			return
+		if runErr == nil && p.ctx.Err() == nil {
+			writer.Flush()
 		}
-
-		writer.Flush()
 	}()
 }
 
-// filterLine works on []byte directly — no string allocation
+func (p *pipelineModel) runSingleCore(reader io.Reader, writer *bufio.Writer) error {
+	cr := &atomicCounterReader{r: reader, bytesRead: &p.bytesRead}
+	scanner := bufio.NewScanner(cr)
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+
+	for scanner.Scan() {
+		select {
+		case <-p.ctx.Done():
+			return nil
+		default:
+		}
+		if p.isArchive && atomic.LoadInt64(&p.bytesWritten) > maxArchiveOutput {
+			return fmt.Errorf("output limit reached (%s) — possible archive bomb", humanSize(maxArchiveOutput))
+		}
+		atomic.AddInt64(&p.linesRead, 1)
+		line := scanner.Bytes()
+		if len(line) > 0 && line[len(line)-1] == '\r' {
+			line = line[:len(line)-1]
+		}
+		if !p.filterLine(line) {
+			atomic.AddInt64(&p.linesDropped, 1)
+			continue
+		}
+		if p.deduplicate {
+			key := string(line)
+			if _, exists := p.seen[key]; exists {
+				atomic.AddInt64(&p.linesDropped, 1)
+				continue
+			}
+			p.seen[key] = struct{}{}
+		}
+		atomic.AddInt64(&p.linesKept, 1)
+		writer.Write(line)
+		writer.WriteByte('\n')
+		atomic.AddInt64(&p.bytesWritten, int64(len(line))+1)
+	}
+	if err := scanner.Err(); err != nil {
+		if p.ctx.Err() == nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// --- Parallel pipeline types ---
+
+type filterChunk struct {
+	seq  int64
+	data []byte
+}
+
+type filterResult struct {
+	seq  int64
+	data []byte
+}
+
+type resultHeap []filterResult
+
+func (h resultHeap) Len() int            { return len(h) }
+func (h resultHeap) Less(i, j int) bool  { return h[i].seq < h[j].seq }
+func (h resultHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
+func (h *resultHeap) Push(x any)         { *h = append(*h, x.(filterResult)) }
+func (h *resultHeap) Pop() any {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[0 : n-1]
+	return x
+}
+
+func (p *pipelineModel) runMultiCore(reader io.Reader, writer *bufio.Writer) error {
+	jobs := p.jobs
+	workCh := make(chan filterChunk, jobs*2)
+	resultCh := make(chan filterResult, jobs*2)
+
+	var wg sync.WaitGroup
+	for i := 0; i < jobs; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for chunk := range workCh {
+				resultCh <- p.processChunk(chunk)
+			}
+		}()
+	}
+	go func() {
+		wg.Wait()
+		close(resultCh)
+	}()
+
+	go p.readChunks(reader, workCh)
+
+	err := p.writeOrdered(resultCh, writer)
+	if err != nil {
+		p.cancel()
+		go func() { for range resultCh {} }()
+	}
+	return err
+}
+
+// readChunks reads the input in parallelChunkSize blocks, aligns splits to
+// newline boundaries, and sends complete-line chunks to workCh.
+func (p *pipelineModel) readChunks(reader io.Reader, workCh chan<- filterChunk) {
+	defer close(workCh)
+
+	var carry []byte
+	var seq int64
+	buf := make([]byte, parallelChunkSize)
+
+	for {
+		select {
+		case <-p.ctx.Done():
+			return
+		default:
+		}
+
+		n, err := reader.Read(buf)
+		if n > 0 {
+			atomic.AddInt64(&p.bytesRead, int64(n))
+
+			block := make([]byte, len(carry)+n)
+			copy(block, carry)
+			copy(block[len(carry):], buf[:n])
+
+			lastNL := bytes.LastIndexByte(block, '\n')
+			if lastNL == -1 {
+				carry = block
+			} else {
+				chunk := block[:lastNL+1]
+				carry = make([]byte, len(block)-lastNL-1)
+				copy(carry, block[lastNL+1:])
+				select {
+				case workCh <- filterChunk{seq: seq, data: chunk}:
+					seq++
+				case <-p.ctx.Done():
+					return
+				}
+			}
+		}
+		if err != nil {
+			if len(carry) > 0 {
+				if carry[len(carry)-1] != '\n' {
+					carry = append(carry, '\n')
+				}
+				select {
+				case workCh <- filterChunk{seq: seq, data: carry}:
+				case <-p.ctx.Done():
+				}
+			}
+			return
+		}
+	}
+}
+
+// processChunk filters all complete lines in a chunk. Safe for concurrent use —
+// reads only immutable pipeline fields. regexp.Regexp is goroutine-safe.
+func (p *pipelineModel) processChunk(chunk filterChunk) filterResult {
+	data := chunk.data
+	out := make([]byte, 0, len(data)/2)
+
+	for len(data) > 0 {
+		nl := bytes.IndexByte(data, '\n')
+		var line []byte
+		if nl == -1 {
+			line = data
+			data = nil
+		} else {
+			line = data[:nl]
+			data = data[nl+1:]
+		}
+		if len(line) > 0 && line[len(line)-1] == '\r' {
+			line = line[:len(line)-1]
+		}
+
+		atomic.AddInt64(&p.linesRead, 1)
+
+		if !p.filterLine(line) {
+			atomic.AddInt64(&p.linesDropped, 1)
+			continue
+		}
+		atomic.AddInt64(&p.linesKept, 1)
+		out = append(out, line...)
+		out = append(out, '\n')
+	}
+	return filterResult{seq: chunk.seq, data: out}
+}
+
+// writeOrdered collects results from workers, reorders them by sequence number
+// using a min-heap, and writes them to the output in original input order.
+func (p *pipelineModel) writeOrdered(resultCh <-chan filterResult, writer *bufio.Writer) error {
+	h := &resultHeap{}
+	heap.Init(h)
+	var nextSeq int64
+
+	for result := range resultCh {
+		heap.Push(h, result)
+		for h.Len() > 0 && (*h)[0].seq == nextSeq {
+			r := heap.Pop(h).(filterResult)
+			if len(r.data) > 0 {
+				if p.isArchive && atomic.LoadInt64(&p.bytesWritten) > maxArchiveOutput {
+					return fmt.Errorf("output limit reached (%s) — possible archive bomb", humanSize(maxArchiveOutput))
+				}
+				writer.Write(r.data)
+				atomic.AddInt64(&p.bytesWritten, int64(len(r.data)))
+			}
+			nextSeq++
+		}
+	}
+	return nil
+}
+
+// filterLine works on []byte directly — no string allocation.
+// Safe for concurrent use: reads only immutable fields set at pipeline creation.
 func (p *pipelineModel) filterLine(line []byte) bool {
 	ll := len(line)
 	if p.minLen > 0 && ll < p.minLen {
