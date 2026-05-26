@@ -391,8 +391,8 @@ func (p *pipelineModel) start() {
 		// mmap dedup always takes precedence for eligible plain files.
 		var bloom *bloomFilter
 		if p.deduplicate && p.bloomSize > 0 && (p.isArchive || !canMmapDedup(p.fileSize)) {
-			if avail, ok := availableRAM(); ok && p.bloomSize > avail*8/10 {
-				runErr = fmt.Errorf("bloom filter needs %s but only %s RAM available",
+			if avail, ok := availableRAM(); ok && p.bloomSize > avail {
+				runErr = fmt.Errorf("bloom filter needs %s but only %s RAM free",
 					humanSize(p.bloomSize), humanSize(avail))
 				return
 			}

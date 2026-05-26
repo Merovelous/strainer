@@ -239,6 +239,13 @@ func (f filterModel) confirm() (filterModel, tea.Cmd) {
 		f.validationErr = fmt.Sprintf("min length (%d) must be ≤ max length (%d)", minLen, maxLen)
 		return f, nil
 	}
+	if bloomSize := f.getBloomSize(); bloomSize > 0 {
+		if avail, ok := availableRAM(); ok && bloomSize > avail {
+			f.validationErr = fmt.Sprintf("bloom filter needs %s but only %s RAM free — choose a smaller size",
+				humanSize(bloomSize), humanSize(avail))
+			return f, nil
+		}
+	}
 	f.validationErr = ""
 	return f, func() tea.Msg { return filterConfirmMsg{} }
 }
@@ -346,8 +353,10 @@ func (f filterModel) bloomAnnotation(sizeBytes int64) string {
 	avail, ok := availableRAM()
 	var ramStr string
 	if ok {
-		if sizeBytes > avail*8/10 {
-			ramStr = sError.Render(fmt.Sprintf("  ⚠ need %s, %s free", humanSize(sizeBytes), humanSize(avail)))
+		if sizeBytes > avail {
+			ramStr = sError.Render(fmt.Sprintf("  ✖ need %s, only %s free", humanSize(sizeBytes), humanSize(avail)))
+		} else if sizeBytes > avail*8/10 {
+			ramStr = sWarning.Render(fmt.Sprintf("  ⚠ need %s, %s free", humanSize(sizeBytes), humanSize(avail)))
 		} else {
 			ramStr = sDim.Render(fmt.Sprintf("  (%s free)", humanSize(avail)))
 		}
