@@ -219,6 +219,11 @@ func (f filterModel) confirm() (filterModel, tea.Cmd) {
 		f.validationErr = fmt.Sprintf("min length (%d) must be ≤ max length (%d)", minLen, maxLen)
 		return f, nil
 	}
+	noFilters := minLen == 0 && maxLen == 0 && !f.isASCIIOnly() && f.getRegexStr() == "" && !f.isDeduplicate()
+	if noFilters {
+		f.validationErr = "no filters selected — enable at least one filter before processing"
+		return f, nil
+	}
 	if bloomSize := f.getBloomSize(); bloomSize > 0 {
 		if avail, ok := pipeline.AvailableRAM(); ok && bloomSize > avail {
 			f.validationErr = fmt.Sprintf("bloom filter needs %s but only %s RAM free — choose a smaller size",
