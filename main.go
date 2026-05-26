@@ -209,7 +209,7 @@ func (m appModelMain) View() string {
 		Width(w).
 		Background(lipgloss.Color("#1a1a2e")).
 		Padding(0, 1).
-		Render(title + sDim.Render("  v1.0"))
+		Render(title + sDim.Render("  v"+Version))
 
 	var content string
 	switch m.state {
