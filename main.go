@@ -185,7 +185,7 @@ func (m appModelMain) View() string {
 		h = 24
 	}
 
-	title := sHeader.Render("  ⚡ WORDLIST FORGE")
+	title := sHeader.Render("  ⚡ STRAINER")
 	titleBar := lipgloss.NewStyle().
 		Width(w).
 		Background(lipgloss.Color("#1a1a2e")).
