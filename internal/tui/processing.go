@@ -129,122 +129,82 @@ func (pm processingModel) Update(msg tea.Msg, teaProgram *tea.Program) (processi
 }
 
 func (pm processingModel) View(width, maxHeight int) string {
-	header := sHeader.Render("  🔄 PROCESSING")
-	fileLine := sDim.Render("  Input: " + pm.pipeline.InputFile)
-	lines := []string{"", header, fileLine, ""}
-
 	lr := atomic.LoadInt64(&pm.pipeline.LinesRead)
 	lk := atomic.LoadInt64(&pm.pipeline.LinesKept)
 	ld := atomic.LoadInt64(&pm.pipeline.LinesDropped)
 	br := atomic.LoadInt64(&pm.pipeline.BytesRead)
 	bw := atomic.LoadInt64(&pm.pipeline.BytesWritten)
-
 	elapsed := time.Since(pm.metrics.startTime)
+	barWidth := width - 6
 
-	var speed string
-	if pm.metrics.currentSpeed > 0 {
-		speed = pipeline.HumanSpeed(pm.metrics.currentSpeed)
-	}
+	lines := []string{""}
 
-	var linesPerSec string
-	if pm.metrics.currentLPS > 0 {
-		linesPerSec = fmt.Sprintf("%.0f lines/s", pm.metrics.currentLPS)
-	}
-
+	// ── Status line ───────────────────────────────────────────────────────
 	var statusStr string
 	switch pm.pipeline.Status {
 	case pipeline.Running:
-		statusStr = sSuccess.Render("● RUNNING")
+		statusStr = sSuccess.Render("● Running")
 	case pipeline.Done:
 		if pm.pipeline.Err != nil {
-			statusStr = sError.Render("✖ ERROR: " + pm.pipeline.Err.Error())
+			statusStr = sError.Render("✖ Error: " + pm.pipeline.Err.Error())
 		} else {
-			statusStr = sSuccess.Render("✔ COMPLETE")
+			statusStr = sSuccess.Render("✔ Complete")
 		}
 	case pipeline.Error:
-		statusStr = sError.Render("✖ ERROR: " + pm.pipeline.Err.Error())
+		statusStr = sError.Render("✖ Error: " + pm.pipeline.Err.Error())
 	default:
-		statusStr = sDim.Render("○ IDLE")
+		statusStr = sDim.Render("○ Starting...")
 	}
 
-	// ETA (plain files only — % is shown inside the bar itself)
 	var etaStr string
-	if pm.pipeline.FileSize > 0 && !pm.pipeline.IsArchive {
+	if pm.pipeline.FileSize > 0 && !pm.pipeline.IsArchive && pm.metrics.currentSpeed > 0 {
 		pct := float64(br) / float64(pm.pipeline.FileSize)
-		if pct > 1.0 {
-			pct = 1.0
-		}
-		if pm.metrics.currentSpeed > 0 && pct < 0.999 {
+		if pct < 0.999 {
 			remaining := float64(pm.pipeline.FileSize-br) / pm.metrics.currentSpeed
-			etaStr = "  ETA " + pipeline.FormatDuration(time.Duration(remaining)*time.Second)
+			etaStr = sDim.Render("   ETA " + pipeline.FormatDuration(time.Duration(remaining)*time.Second))
 		}
 	}
+	lines = append(lines, "  "+statusStr+etaStr)
 
-	panel := fmt.Sprintf("  %s%s", statusStr, sDim.Render(etaStr))
-	if lr > 0 {
-		var keptPct string
-		if lr > 0 {
-			keptPct = fmt.Sprintf(" (%.0f%% kept)", float64(lk)/float64(lr)*100)
-		}
-		panel += fmt.Sprintf("\n  Lines: %s read  %s kept%s  %s dropped",
-			sValue.Render(pipeline.CommaFmt(lr)),
-			sSuccess.Render(pipeline.CommaFmt(lk)),
-			sDim.Render(keptPct),
-			sError.Render(pipeline.CommaFmt(ld)))
-	} else {
-		panel += fmt.Sprintf("\n  Lines: %s read  %s kept  %s dropped",
-			sValue.Render(pipeline.CommaFmt(lr)),
-			sSuccess.Render(pipeline.CommaFmt(lk)),
-			sError.Render(pipeline.CommaFmt(ld)))
-	}
-	panel += fmt.Sprintf("\n  Read: %s  Written: %s",
-		sValue.Render(pipeline.HumanSize(br)),
-		sValue.Render(pipeline.HumanSize(bw)))
-	panel += fmt.Sprintf("\n  Speed: %s  %s",
-		sValue.Render(speed),
-		sDim.Render(linesPerSec))
-	panel += fmt.Sprintf("\n  Elapsed: %s", sValue.Render(pipeline.FormatDuration(elapsed)))
-
-	if pm.pipeline.Status == pipeline.Running && (pm.metrics.cpuPct > 0 || pm.metrics.rssBytes > 0) {
-		panel += fmt.Sprintf("\n  CPU: %.1f%%  RAM: %s",
-			pm.metrics.cpuPct,
-			pipeline.HumanSize(pm.metrics.rssBytes))
-	}
-
-	panelBox := sPanel.Width(width - 4).Render(panel)
-	lines = append(lines, panelBox)
-
+	// ── Progress bar ──────────────────────────────────────────────────────
 	lines = append(lines, "")
-	bar := renderProgressBar(width-6, pm.pipeline.Status == pipeline.Running, br, pm.pipeline.FileSize, pm.pipeline.IsArchive)
+	bar := renderProgressBar(barWidth, pm.pipeline.Status == pipeline.Running, br, pm.pipeline.FileSize, pm.pipeline.IsArchive)
 	lines = append(lines, "  "+bar)
-
 	lines = append(lines, "")
-	var rules []string
-	if pm.pipeline.MinLen > 0 {
-		rules = append(rules, fmt.Sprintf("min=%d", pm.pipeline.MinLen))
-	}
-	if pm.pipeline.MaxLen > 0 {
-		rules = append(rules, fmt.Sprintf("max=%d", pm.pipeline.MaxLen))
-	}
-	if pm.pipeline.ASCIIOnly {
-		rules = append(rules, "ascii-only")
-	}
-	if pm.pipeline.Regex != nil {
-		rules = append(rules, "regex="+pm.pipeline.Regex.String())
-	}
-	if pm.pipeline.Deduplicate {
-		rules = append(rules, "dedup")
-	}
-	if len(rules) > 0 {
-		lines = append(lines, sDim.Render("  Filters: ")+sSuccess.Render(strings.Join(rules, ", ")))
+
+	// ── Metrics panel ─────────────────────────────────────────────────────
+	var keptPct string
+	if lr > 0 {
+		keptPct = sDimmer.Render(fmt.Sprintf("  %.0f%% kept", float64(lk)/float64(lr)*100))
 	}
 
-	lines = append(lines, "")
-	if pm.pipeline.Status == pipeline.Done || pm.pipeline.Status == pipeline.Error {
-		lines = append(lines, sDim.Render("  [q] Continue to summary"))
+	var speedStr, lpsStr string
+	if pm.metrics.currentSpeed > 0 {
+		speedStr = pipeline.HumanSpeed(pm.metrics.currentSpeed)
 	} else {
-		lines = append(lines, sDim.Render("  [q] Cancel"))
+		speedStr = "─"
 	}
+	if pm.metrics.currentLPS > 0 {
+		lpsStr = fmt.Sprintf("%.0f lines/s", pm.metrics.currentLPS)
+	}
+
+	col := func(label, value string) string {
+		return sDim.Render(fmt.Sprintf("  %-10s", label)) + sValue.Render(value)
+	}
+
+	panel := col("Read", pipeline.CommaFmt(lr)+" lines") + keptPct + "\n"
+	panel += col("Kept", pipeline.CommaFmt(lk)+" lines") +
+		sDimmer.Render(fmt.Sprintf("  %s dropped", pipeline.CommaFmt(ld))) + "\n"
+	panel += col("Data", pipeline.HumanSize(br)+" read") +
+		sDimmer.Render("   "+pipeline.HumanSize(bw)+" written") + "\n"
+	panel += col("Speed", speedStr) + sDimmer.Render("   "+lpsStr) + "\n"
+	panel += col("Elapsed", pipeline.FormatDuration(elapsed))
+	if pm.pipeline.Status == pipeline.Running && (pm.metrics.cpuPct > 0 || pm.metrics.rssBytes > 0) {
+		panel += sDimmer.Render(fmt.Sprintf("   CPU %.1f%%   RAM %s",
+			pm.metrics.cpuPct, pipeline.HumanSize(pm.metrics.rssBytes)))
+	}
+
+	lines = append(lines, sPanel.Width(width-4).Render(panel))
 
 	return strings.Join(lines, "\n")
 }

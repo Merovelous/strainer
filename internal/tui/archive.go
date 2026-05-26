@@ -3,12 +3,13 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/Merovelous/strainer/internal/pipeline"
 	tea "github.com/charmbracelet/bubbletea"
-	"os/exec"
 )
 
 func newArchivePickerModel(archivePath string) (archivePickerModel, tea.Cmd) {
@@ -179,32 +180,35 @@ func (ap archivePickerModel) Update(msg tea.Msg) (archivePickerModel, tea.Cmd) {
 	return ap, nil
 }
 
-func (ap archivePickerModel) View(maxHeight int) string {
+func (ap archivePickerModel) View(width, maxHeight int) string {
+	listWidth := width - 2
+	if listWidth < 20 {
+		listWidth = 20
+	}
+
+	archiveLabel := sDim.Render("  ◈  " + filepath.Base(ap.archivePath))
 	var posStr string
 	if len(ap.entries) > 0 {
-		posStr = sDim.Render(fmt.Sprintf("  %d / %d", ap.cursor+1, len(ap.entries)))
+		posStr = sDimmer.Render(fmt.Sprintf("  %d/%d", ap.cursor+1, len(ap.entries)))
 	}
-	header := sHeader.Render("  📦 ARCHIVE CONTENTS") + posStr
-	archive := sDim.Render("  " + ap.archivePath)
-	lines := []string{"", header, archive, ""}
+	lines := []string{"", archiveLabel + posStr, ""}
 
 	if ap.loading {
-		lines = append(lines, sDim.Render("  Scanning archive..."))
+		lines = append(lines, sDim.Render("  Scanning archive contents..."))
 		return strings.Join(lines, "\n")
 	}
 
 	if ap.err != nil {
-		lines = append(lines, sError.Render("  Error: "+ap.err.Error()))
+		lines = append(lines, sError.Render("  ✖ "+ap.err.Error()))
 		return strings.Join(lines, "\n")
 	}
 
 	if len(ap.entries) == 0 {
-		lines = append(lines, sWarning.Render("  (no files found in archive)"))
+		lines = append(lines, sWarning.Render("  No files found in archive"))
 		lines = append(lines, sDim.Render("  Archive may be empty or format unsupported"))
 		return strings.Join(lines, "\n")
 	}
 
-	// Entries
 	visible := maxHeight - 6
 	if visible < 5 {
 		visible = 5
@@ -217,29 +221,29 @@ func (ap archivePickerModel) View(maxHeight int) string {
 
 	for i := start; i < end; i++ {
 		e := ap.entries[i]
-		cursor := "  "
-		if i == ap.cursor {
-			cursor = sPrompt.Render("▸ ")
-		}
+		selected := i == ap.cursor
 
-		icon := "📄"
-		name := e.name
-		if i == ap.cursor {
-			name = sSelected.Render(name)
+		if selected {
+			row := sRowSelected.Width(listWidth).Render("   ◦  " + e.name)
+			lines = append(lines, row)
+		} else {
+			lines = append(lines, sDim.Render("     ◦  ")+e.name)
 		}
-
-		line := fmt.Sprintf("%s%s %s", cursor, icon, name)
-		if i == ap.cursor {
-			line = sHighlight.Render(strings.TrimLeft(line, " "))
-			line = " " + line
-		}
-		lines = append(lines, line)
 	}
 
-	// Footer
-	lines = append(lines, "")
-	footer := sDim.Render("  [↑↓] Navigate  [Enter] Select file to process  [q] Cancel")
-	lines = append(lines, footer)
+	if len(ap.entries) > visible {
+		above := ap.offset > 0
+		below := ap.offset+visible < len(ap.entries)
+		var scroll string
+		if above && below {
+			scroll = "↑↓"
+		} else if above {
+			scroll = "↑ "
+		} else {
+			scroll = " ↓"
+		}
+		lines = append(lines, sDimmer.Render(fmt.Sprintf("  %s  %d more", scroll, len(ap.entries)-visible)))
+	}
 
 	return strings.Join(lines, "\n")
 }

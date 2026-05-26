@@ -9,6 +9,7 @@ import (
 
 	"github.com/Merovelous/strainer/internal/pipeline"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // bloomPresets maps choiceIdx → filter size in bytes; index 0 = disabled.
@@ -349,94 +350,168 @@ func (f filterModel) bloomAnnotation(sizeBytes int64) string {
 	return fprStr + ramStr
 }
 
-func (f filterModel) View(width, maxHeight int) string {
-	header := sHeader.Render("  ⚙️  FILTER CONFIGURATION")
-	file := sDim.Render("  File: " + f.fileName)
-	lines := []string{"", header, file, ""}
+// renderSectionDivider renders "  ─  NAME  ──────" filling to width.
+func renderSectionDivider(name string, width int) string {
+	label := " " + name + " "
+	// visible chars: 2(margin) + 1(─) + len(label) = 3+len(label)
+	dashCount := width - 3 - len(label) - 2
+	if dashCount < 2 {
+		dashCount = 2
+	}
+	return sDimmer.Render("  ─") + sSection.Render(label) + sDimmer.Render(strings.Repeat("─", dashCount))
+}
 
-	for i, opt := range f.options {
-		cursor := "  "
-		if i == f.cursor {
-			cursor = sPrompt.Render("▸ ")
+// renderOptValue returns the value indicator string for a filter option.
+func (f filterModel) renderOptValue(i int) string {
+	opt := f.options[i]
+	isTyping := f.inputing && f.inputIdx == i
+
+	switch {
+	case opt.dynamic:
+		if isTyping {
+			return sValue.Render(fmt.Sprintf("[ %-5s]", f.inputBuf+"█"))
+		}
+		if opt.enabled && opt.value > 0 {
+			return sValue.Render(fmt.Sprintf("[ %-5d]", opt.value))
+		}
+		return sDim.Render("[  ─   ]")
+
+	case opt.strDynamic:
+		if isTyping {
+			disp := f.inputBuf
+			if len(disp) > 10 {
+				disp = "…" + disp[len(disp)-9:]
+			}
+			return sValue.Render("[ " + disp + "█ ]")
+		}
+		if opt.enabled && opt.strValue != "" {
+			disp := opt.strValue
+			if len(disp) > 10 {
+				disp = "…" + disp[len(disp)-9:]
+			}
+			return sValue.Render("[ " + disp + " ]")
+		}
+		return sDim.Render("[  ─   ]")
+
+	case opt.cycle:
+		// Bloom size — nested under Deduplicate.
+		if !f.isDeduplicate() {
+			return sDimmer.Render("[← off →]") + sDimmer.Render("  enable Deduplicate first")
+		}
+		customIdx := len(opt.choices) - 1
+		isCustom := opt.choiceIdx == customIdx
+		choice := ""
+		if opt.choiceIdx < len(opt.choices) {
+			choice = opt.choices[opt.choiceIdx]
+		}
+		if isCustom {
+			if isTyping {
+				return sValue.Render(fmt.Sprintf("[← %s█ →]", f.inputBuf))
+			}
+			if opt.strValue != "" {
+				parsed := pipeline.ParseBloomSize(opt.strValue)
+				if parsed > 0 {
+					return sValue.Render(fmt.Sprintf("[← %s →]", opt.strValue)) + f.bloomAnnotation(parsed)
+				}
+				return sError.Render(fmt.Sprintf("[← %s →]", opt.strValue)) + sError.Render("  invalid — use e.g. 16g, 2048m")
+			}
+			return sValue.Render("[← Custom →]") + sDim.Render("  press Enter to type size")
+		}
+		if opt.choiceIdx > 0 && opt.choiceIdx < len(bloomPresets) {
+			return sValue.Render(fmt.Sprintf("[← %s →]", choice)) + f.bloomAnnotation(bloomPresets[opt.choiceIdx])
+		}
+		return sDim.Render(fmt.Sprintf("[← %s →]", choice))
+
+	default:
+		if opt.enabled {
+			return sSuccess.Render("[  ✓  ]")
+		}
+		return sDim.Render("[  ─  ]")
+	}
+}
+
+func (f filterModel) View(width, maxHeight int) string {
+	contentWidth := width - 4
+	if contentWidth < 40 {
+		contentWidth = 40
+	}
+
+	// File context header
+	fileInfo := sDim.Render("  " + f.fileName)
+	if f.fileSize > 0 {
+		fileInfo += sDimmer.Render("  " + pipeline.HumanSize(f.fileSize))
+	}
+	lines := []string{"", fileInfo, ""}
+
+	// Helper: render one option row
+	renderRow := func(i int, indent bool) string {
+		opt := f.options[i]
+		focused := i == f.cursor && !f.inputing
+
+		// Cursor indicator
+		cur := "   "
+		if focused {
+			cur = sPrompt.Render("▸") + "  "
 		}
 
-		// Derive enabled state (cycle options use choiceIdx)
-		isEnabled := opt.enabled || (opt.cycle && opt.choiceIdx > 0)
-
-		// Checkbox
-		check := sError.Render("☐")
-		if isEnabled {
-			check = sSuccess.Render("☑")
+		// Indentation prefix (for bloom, nested under dedup)
+		prefix := ""
+		if indent {
+			prefix = sDimmer.Render("  └─ ")
+			cur = "   "
+			if focused {
+				cur = sPrompt.Render("▸") + "  "
+			}
 		}
 
 		// Name
+		nameWidth := 16
 		name := opt.name
-		if i == f.cursor && !f.inputing {
-			name = sSelected.Render(name)
-		} else if isEnabled {
-			name = sSuccess.Render(name)
-		} else {
-			name = sDim.Render(name)
+		pad := nameWidth - len(name)
+		if pad < 1 {
+			pad = 1
+		}
+		var styledName string
+		isEnabled := opt.enabled || (opt.cycle && opt.choiceIdx > 0 && f.isDeduplicate())
+		switch {
+		case focused:
+			styledName = sSelected.Render(name) + strings.Repeat(" ", pad)
+		case isEnabled:
+			styledName = sSuccess.Render(name) + strings.Repeat(" ", pad)
+		case indent && !f.isDeduplicate():
+			styledName = sDimmer.Render(name) + strings.Repeat(" ", pad)
+		default:
+			styledName = sDim.Render(name) + strings.Repeat(" ", pad)
 		}
 
-		// Value
-		valStr := ""
-		if opt.strDynamic {
-			if f.inputing && f.inputIdx == i {
-				valStr = sValue.Render(" [" + f.inputBuf + "█]")
-			} else if opt.enabled && opt.strValue != "" {
-				valStr = sValue.Render(" [" + opt.strValue + "]")
-			} else {
-				valStr = sDim.Render(" [press Enter to set]")
-			}
-		} else if opt.dynamic {
-			if f.inputing && f.inputIdx == i {
-				valStr = sValue.Render(" [" + f.inputBuf + "█]")
-			} else if opt.enabled && opt.value > 0 {
-				valStr = sValue.Render(fmt.Sprintf(" [%d]", opt.value))
-			} else {
-				valStr = sDim.Render(" [press Enter to set]")
-			}
-		} else if opt.cycle {
-			customIdx := len(opt.choices) - 1
-			isCustom := opt.choiceIdx == customIdx
-			choice := ""
-			if opt.choiceIdx < len(opt.choices) {
-				choice = opt.choices[opt.choiceIdx]
-			}
-			if !f.isDeduplicate() {
-				valStr = sDim.Render(fmt.Sprintf(" [← %s →]", choice) + "  (enable Deduplicate first)")
-			} else if isCustom {
-				if f.inputing && f.inputIdx == i {
-					valStr = sValue.Render(fmt.Sprintf(" [← %s█ →]", f.inputBuf))
-				} else if opt.strValue != "" {
-					parsed := pipeline.ParseBloomSize(opt.strValue)
-					arrowStr := fmt.Sprintf(" [← %s →]", opt.strValue)
-					if parsed > 0 {
-						valStr = sValue.Render(arrowStr) + f.bloomAnnotation(parsed)
-					} else {
-						valStr = sError.Render(arrowStr + " (invalid — e.g. 16g, 2048m)")
-					}
-				} else {
-					valStr = sValue.Render(" [← Custom →]") + sDim.Render("  press Enter to input size")
-				}
-			} else if opt.choiceIdx > 0 && opt.choiceIdx < len(bloomPresets) {
-				valStr = sValue.Render(fmt.Sprintf(" [← %s →]", choice)) + f.bloomAnnotation(bloomPresets[opt.choiceIdx])
-			} else {
-				valStr = sDim.Render(fmt.Sprintf(" [← %s →]", choice))
-			}
-		}
-
-		lines = append(lines, fmt.Sprintf("%s%s %s%s", cursor, check, name, valStr))
+		val := f.renderOptValue(i)
+		return cur + prefix + styledName + val
 	}
 
-	// Output filename preview
+	// Group: LENGTH
+	lines = append(lines, renderSectionDivider("LENGTH", contentWidth))
+	lines = append(lines, renderRow(0, false)) // Min length
+	lines = append(lines, renderRow(1, false)) // Max length
 	lines = append(lines, "")
-	outputName := f.buildOutputName(f.fileName)
-	lines = append(lines, sSubHeader.Render("  Output: ")+sValue.Render(outputName))
 
-	// Rules summary
+	// Group: CONTENT
+	lines = append(lines, renderSectionDivider("CONTENT", contentWidth))
+	lines = append(lines, renderRow(2, false)) // ASCII only
+	lines = append(lines, renderRow(3, false)) // Regex match
 	lines = append(lines, "")
+
+	// Group: DEDUPLICATION
+	lines = append(lines, renderSectionDivider("DEDUPLICATION", contentWidth))
+	lines = append(lines, renderRow(4, false)) // Deduplicate
+	lines = append(lines, renderRow(5, true))  // Bloom size (nested)
+	lines = append(lines, "")
+
+	// Output preview + rules summary
+	sep := sDimmer.Render(strings.Repeat("─", contentWidth))
+	lines = append(lines, sep)
+	outputName := f.buildOutputName(f.fileName)
+	lines = append(lines, sDim.Render("  Output  ")+sValue.Render(outputName))
+
 	var rules []string
 	if f.getMinLen() > 0 {
 		rules = append(rules, fmt.Sprintf("min=%d", f.getMinLen()))
@@ -454,29 +529,39 @@ func (f filterModel) View(width, maxHeight int) string {
 		rules = append(rules, "dedup")
 	}
 	if len(rules) > 0 {
-		lines = append(lines, sDim.Render("  Rules: ")+sSuccess.Render(strings.Join(rules, ", ")))
+		lines = append(lines, sDim.Render("  Rules   ")+sSuccess.Render(strings.Join(rules, ", ")))
 	} else {
-		lines = append(lines, sWarning.Render("  No filters configured"))
+		lines = append(lines, sWarning.Render("  Rules   none selected"))
 	}
-
-	// Start button
 	lines = append(lines, "")
-	if f.cursor == len(f.options) && !f.inputing {
-		lines = append(lines, sPrompt.Render("▸ ")+sHighlight.Render(" ▶  Start Processing "))
+
+	// Start button — styled as a real button.
+	btnFocused := f.cursor == len(f.options) && !f.inputing
+	var btnStyle lipgloss.Style
+	var btnText string
+	if btnFocused {
+		btnStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorCyan).
+			Foreground(colorWhite).
+			Bold(true).
+			Padding(0, 3)
+		btnText = "▶   Start Processing"
 	} else {
-		lines = append(lines, sDim.Render("    ▶  Start Processing"))
+		btnStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorBorder).
+			Foreground(colorGray).
+			Padding(0, 3)
+		btnText = "▶   Start Processing"
 	}
+	lines = append(lines, "  "+btnStyle.Render(btnText))
 
 	// Validation error
 	if f.validationErr != "" {
 		lines = append(lines, "")
-		lines = append(lines, sError.Render("  ✖ "+f.validationErr))
+		lines = append(lines, sError.Render("  ✖  "+f.validationErr))
 	}
-
-	// Footer
-	lines = append(lines, "")
-	footer := sDim.Render("  [↑↓] Navigate  [Enter/Space] Toggle  [←→] Cycle  [e] Edit value  [Tab] Start  [q] Quit")
-	lines = append(lines, footer)
 
 	return strings.Join(lines, "\n")
 }

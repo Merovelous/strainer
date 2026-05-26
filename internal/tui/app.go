@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -254,6 +255,55 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func renderSteps(state viewState) string {
+	type step struct {
+		label string
+		idx   int
+	}
+	steps := []step{
+		{"Select", 0},
+		{"Filters", 1},
+		{"Process", 2},
+		{"Done", 3},
+	}
+	current := func() int {
+		switch state {
+		case stateBrowser, stateArchivePicker:
+			return 0
+		case stateFilters, stateOverwriteConfirm:
+			return 1
+		case stateProcessing:
+			return 2
+		case stateSummary:
+			return 3
+		}
+		return 0
+	}()
+	var parts []string
+	for _, s := range steps {
+		var rendered string
+		switch {
+		case s.idx < current:
+			rendered = sStepDone.Render("✓ " + s.label)
+		case s.idx == current:
+			rendered = sStepActive.Render("● " + s.label)
+		default:
+			rendered = sStepFuture.Render("○ " + s.label)
+		}
+		parts = append(parts, rendered)
+	}
+	sep := sStepSep.Render("  ›  ")
+	return strings.Join(parts, sep)
+}
+
+func renderHints(pairs ...string) string {
+	var parts []string
+	for i := 0; i+1 < len(pairs); i += 2 {
+		parts = append(parts, sKey.Render(pairs[i])+sDim.Render(" "+pairs[i+1]))
+	}
+	return strings.Join(parts, sDimmer.Render("  ·  "))
+}
+
 func (m appModel) View() string {
 	if m.quitting {
 		return ""
@@ -268,56 +318,72 @@ func (m appModel) View() string {
 		h = 24
 	}
 
-	title := sHeader.Render("  ⚡ STRAINER")
+	// Title bar: logo left, step breadcrumb right.
+	logo := sHeader.Render("⚡ strainer") + sDim.Render(" v"+m.version)
+	steps := renderSteps(m.state)
+	stepsWidth := lipgloss.Width(steps)
+	logoWidth := lipgloss.Width(logo)
+	gap := w - logoWidth - stepsWidth - 4
+	if gap < 2 {
+		gap = 2
+	}
+	titleContent := "  " + logo + strings.Repeat(" ", gap) + steps + "  "
 	titleBar := lipgloss.NewStyle().
 		Width(w).
-		Background(lipgloss.Color("#1a1a2e")).
-		Padding(0, 1).
-		Render(title + sDim.Render("  v"+m.version))
+		Background(colorBgAlt).
+		Render(titleContent)
 
 	var content string
 	switch m.state {
 	case stateBrowser:
-		content = m.browser.View(h - 5)
+		content = m.browser.View(w, h-4)
 	case stateArchivePicker:
-		content = m.archivePicker.View(h - 5)
+		content = m.archivePicker.View(w, h-4)
 	case stateFilters:
-		content = m.filters.View(w, h-5)
+		content = m.filters.View(w, h-4)
 	case stateOverwriteConfirm:
 		absOut := m.outputFile
 		if abs, err := filepath.Abs(m.outputFile); err == nil {
 			absOut = abs
 		}
-		header := sWarning.Render("  ⚠  OUTPUT FILE EXISTS")
-		detail := "\n\n  " + sDim.Render("File: ") + sWarning.Render(absOut) + "\n\n  Overwrite the existing file?"
+		header := sWarning.Render("  ⚠  Output File Exists")
+		detail := "\n\n  " + sDim.Render("Path: ") + sWarning.Render(absOut) +
+			"\n\n  Overwrite the existing file?"
 		box := sPanelYellow.Width(w - 4).Render(header + detail)
-		content = "\n" + box + "\n\n" + sDim.Render("  [y] Overwrite  [n / Esc / q] Go back")
+		yesHint := sSuccess.Render("y") + sDim.Render(" overwrite")
+		noHint := sError.Render("n") + sDim.Render(" keep existing")
+		content = "\n" + box + "\n\n  " + yesHint + "   " + noHint
 	case stateProcessing:
-		content = m.processing.View(w, h-5)
+		content = m.processing.View(w, h-4)
 	case stateSummary:
-		content = m.summary.View(w, h-5)
+		content = m.summary.View(w, h-4)
 	}
 
-	var footer string
+	// Footer bar: contextual key hints.
+	var hints string
 	switch m.state {
 	case stateBrowser:
-		footer = sDimmer.Render("  Select a file or archive to process")
+		hints = renderHints("↑↓", "navigate", "Enter", "select", "⌫", "parent dir", "q", "quit")
 	case stateArchivePicker:
-		footer = sDimmer.Render("  Choose a file from the archive")
+		hints = renderHints("↑↓", "navigate", "Enter", "select file", "q", "back")
 	case stateFilters:
-		footer = sDimmer.Render("  Configure filter rules, then press Tab to start")
+		if m.filters.inputing {
+			hints = renderHints("Type", "enter value", "Enter", "confirm", "Esc", "cancel")
+		} else {
+			hints = renderHints("↑↓", "navigate", "Space", "toggle", "←→", "adjust", "Enter", "edit", "q", "back")
+		}
 	case stateOverwriteConfirm:
-		footer = sDimmer.Render("  Output file already exists")
+		hints = renderHints("y", "overwrite", "n / Esc", "cancel")
 	case stateProcessing:
-		footer = sDimmer.Render("  Processing in progress...")
+		hints = renderHints("q", "cancel processing")
 	case stateSummary:
-		footer = sDimmer.Render("  Processing complete")
+		hints = renderHints("r", "process another file", "q", "exit")
 	}
 	footerBar := lipgloss.NewStyle().
 		Width(w).
-		Background(lipgloss.Color("#111111")).
+		Background(colorBgAlt).
 		Padding(0, 1).
-		Render(footer)
+		Render("  " + hints)
 
 	return fmt.Sprintf("%s\n%s\n%s", titleBar, content, footerBar)
 }

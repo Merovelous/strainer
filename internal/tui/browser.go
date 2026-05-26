@@ -9,6 +9,7 @@ import (
 
 	"github.com/Merovelous/strainer/internal/pipeline"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func newBrowserModel(dir string) browserModel {
@@ -142,19 +143,23 @@ func (b browserModel) Update(msg tea.Msg) (browserModel, tea.Cmd) {
 	return b, nil
 }
 
-func (b browserModel) View(maxHeight int) string {
+func (b browserModel) View(width, maxHeight int) string {
 	if !b.ready {
-		return sDim.Render("  Loading...")
+		return "\n" + sDim.Render("  Loading directory...")
 	}
 
-	// Header
+	listWidth := width - 2
+	if listWidth < 20 {
+		listWidth = 20
+	}
+
+	// Path header
+	dirLabel := sDim.Render("  " + b.currentDir)
 	var posStr string
 	if len(b.entries) > 0 {
-		posStr = sDim.Render(fmt.Sprintf("  %d / %d", b.cursor+1, len(b.entries)))
+		posStr = sDimmer.Render(fmt.Sprintf("  %d/%d", b.cursor+1, len(b.entries)))
 	}
-	header := sHeader.Render("  📁 FILE BROWSER") + posStr
-	dir := sDim.Render("  " + b.currentDir)
-	lines := []string{"", header, dir, ""}
+	lines := []string{"", dirLabel + posStr, ""}
 
 	// Entries
 	visible := maxHeight - 6
@@ -169,43 +174,61 @@ func (b browserModel) View(maxHeight int) string {
 
 	for i := start; i < end; i++ {
 		e := b.entries[i]
-		cursor := "  "
-		if i == b.cursor {
-			cursor = sPrompt.Render("▸ ")
+		selected := i == b.cursor
+
+		var icon, nameStr, sizeStr string
+		switch {
+		case e.isDir:
+			icon = sCyan.Render(" ▶ ")
+			nameStr = sCyan.Render(e.name + "/")
+		case e.isArchive:
+			icon = sMagenta.Render(" ◈ ")
+			nameStr = sMagenta.Render(e.name)
+			sizeStr = pipeline.HumanSize(e.size)
+		default:
+			icon = "   "
+			nameStr = e.name
+			sizeStr = pipeline.HumanSize(e.size)
 		}
 
-		var icon, name, sizeStr string
-		if e.isDir {
-			icon = sCyan.Render("📁")
-			name = sCyan.Render(e.name + "/")
-		} else if e.isArchive {
-			icon = sMagenta.Render("📦")
-			name = sMagenta.Render(e.name)
-			sizeStr = sDim.Render("  " + pipeline.HumanSize(e.size))
+		innerLeft := "  " + icon + " " + nameStr
+		innerGap := listWidth - lipgloss.Width(innerLeft) - len(sizeStr) - 2
+		if innerGap < 1 {
+			innerGap = 1
+		}
+
+		var row string
+		if selected {
+			rowStyle := sRowSelected.Width(listWidth)
+			row = rowStyle.Render(innerLeft + strings.Repeat(" ", innerGap) + sizeStr)
 		} else {
-			icon = "  "
-			name = e.name
-			sizeStr = sDim.Render("  " + pipeline.HumanSize(e.size))
+			row = innerLeft + strings.Repeat(" ", innerGap) + sDim.Render(sizeStr)
 		}
 
-		line := fmt.Sprintf("%s%s %s%s", cursor, icon, name, sizeStr)
-		if i == b.cursor {
-			line = sHighlight.Render(strings.TrimLeft(line, " "))
-			line = " " + line
-		}
-		lines = append(lines, line)
+		lines = append(lines, row)
 	}
 
 	if b.err != nil {
-		lines = append(lines, sError.Render("  Error: "+b.err.Error()))
+		lines = append(lines, "")
+		lines = append(lines, sError.Render("  ✖ "+b.err.Error()))
 	} else if len(b.entries) == 0 {
 		lines = append(lines, sDim.Render("  (empty directory)"))
 	}
 
-	// Footer
-	lines = append(lines, "")
-	footer := sDim.Render("  [↑↓] Navigate  [Enter] Select  [Backspace] Parent dir  [q] Quit")
-	lines = append(lines, footer)
+	// Scroll indicator
+	if len(b.entries) > visible {
+		above := b.offset > 0
+		below := b.offset+visible < len(b.entries)
+		var scroll string
+		if above && below {
+			scroll = "↑↓"
+		} else if above {
+			scroll = "↑ "
+		} else {
+			scroll = " ↓"
+		}
+		lines = append(lines, sDimmer.Render(fmt.Sprintf("  %s  %d more", scroll, len(b.entries)-visible)))
+	}
 
 	return strings.Join(lines, "\n")
 }
