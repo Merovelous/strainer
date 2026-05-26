@@ -94,7 +94,7 @@ func (pm processingModel) Update(msg tea.Msg, teaProgram *tea.Program) (processi
 				if elapsed > 0 {
 					// CPU delta
 					delta := ticks - pm.metrics.prevCPUTicks
-					pm.metrics.cpuPct = (delta / 100.0 / elapsed / float64(runtime.NumCPU())) * 100.0
+					pm.metrics.cpuPct = (delta / cpuTicksPerSec() / elapsed / float64(runtime.NumCPU())) * 100.0
 
 					// Rolling EMA speed — alpha=0.3 smooths over ~3 ticks (300ms)
 					const alpha = 0.3

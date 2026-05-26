@@ -1,5 +1,8 @@
 //go:build linux
 
+// cpuTicksPerSec is the scale used to convert getCPURawTicks deltas to seconds.
+// Linux /proc/self/stat reports jiffies; HZ=100 on virtually all kernels.
+
 package tui
 
 import (
@@ -38,3 +41,5 @@ func getRSSBytes() int64 {
 	}
 	return 0
 }
+
+func cpuTicksPerSec() float64 { return 100.0 }
