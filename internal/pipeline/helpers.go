@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -89,6 +90,24 @@ func HumanSpeed(bytesPerSec float64) string {
 		return fmt.Sprintf("%.1f MB/s", bytesPerSec/(1024*1024))
 	}
 	return fmt.Sprintf("%.2f GB/s", bytesPerSec/(1024*1024*1024))
+}
+
+// IsLikelyBinary returns true if the file looks like binary data.
+// It reads up to 8 KB and checks for null bytes, which are absent in plain text.
+func IsLikelyBinary(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	buf := make([]byte, 8192)
+	n, _ := f.Read(buf)
+	for _, b := range buf[:n] {
+		if b == 0x00 {
+			return true
+		}
+	}
+	return false
 }
 
 // ParseBloomSize parses human size strings like "16g", "2048m" into bytes.
