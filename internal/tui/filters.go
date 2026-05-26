@@ -430,6 +430,16 @@ func (f filterModel) renderOptValue(i int) string {
 	}
 }
 
+// optHints are shown as a dim hint line when that option is focused.
+var optHints = [6]string{
+	"Keep lines with at least this many characters",
+	"Keep lines with at most this many characters",
+	"Drop lines that contain non-printable or non-ASCII bytes",
+	"Keep only lines that match a regular expression",
+	"Remove duplicate lines — keeps first occurrence",
+	"RAM budget for dedup on large files — more RAM = fewer missed duplicates",
+}
+
 func (f filterModel) View(width, maxHeight int) string {
 	contentWidth := width - 4
 	if contentWidth < 40 {
@@ -443,72 +453,76 @@ func (f filterModel) View(width, maxHeight int) string {
 	}
 	lines := []string{"", fileInfo, ""}
 
-	// Helper: render one option row
-	renderRow := func(i int, indent bool) string {
+	// renderRow builds one option line + optional hint line when focused.
+	renderRow := func(i int, indent bool) []string {
 		opt := f.options[i]
 		focused := i == f.cursor && !f.inputing
 
-		// Cursor indicator
 		cur := "   "
 		if focused {
 			cur = sPrompt.Render("▸") + "  "
 		}
 
-		// Indentation prefix (for bloom, nested under dedup)
-		prefix := ""
+		indentPfx := ""
 		if indent {
-			prefix = sDimmer.Render("  └─ ")
-			cur = "   "
-			if focused {
-				cur = sPrompt.Render("▸") + "  "
-			}
+			indentPfx = sDimmer.Render("  └─ ")
 		}
 
-		// Name
-		nameWidth := 16
+		const nameCol = 17
 		name := opt.name
-		pad := nameWidth - len(name)
+		pad := nameCol - len(name)
+		if indent {
+			pad -= 5
+		}
 		if pad < 1 {
 			pad = 1
 		}
-		var styledName string
+
 		isEnabled := opt.enabled || (opt.cycle && opt.choiceIdx > 0 && f.isDeduplicate())
+		var styledName string
 		switch {
 		case focused:
-			styledName = sSelected.Render(name) + strings.Repeat(" ", pad)
+			styledName = sSelected.Render(name)
 		case isEnabled:
-			styledName = sSuccess.Render(name) + strings.Repeat(" ", pad)
+			styledName = sSuccess.Render(name)
 		case indent && !f.isDeduplicate():
-			styledName = sDimmer.Render(name) + strings.Repeat(" ", pad)
+			styledName = sDimmer.Render(name)
 		default:
-			styledName = sDim.Render(name) + strings.Repeat(" ", pad)
+			styledName = sDim.Render(name)
 		}
 
-		val := f.renderOptValue(i)
-		return cur + prefix + styledName + val
+		row := cur + indentPfx + styledName + strings.Repeat(" ", pad) + f.renderOptValue(i)
+		if focused && i < len(optHints) {
+			hint := sDimmer.Render("       " + optHints[i])
+			return []string{row, hint}
+		}
+		return []string{row}
+	}
+
+	appendRows := func(rows []string) {
+		lines = append(lines, rows...)
 	}
 
 	// Group: LENGTH
 	lines = append(lines, renderSectionDivider("LENGTH", contentWidth))
-	lines = append(lines, renderRow(0, false)) // Min length
-	lines = append(lines, renderRow(1, false)) // Max length
+	appendRows(renderRow(0, false))
+	appendRows(renderRow(1, false))
 	lines = append(lines, "")
 
 	// Group: CONTENT
 	lines = append(lines, renderSectionDivider("CONTENT", contentWidth))
-	lines = append(lines, renderRow(2, false)) // ASCII only
-	lines = append(lines, renderRow(3, false)) // Regex match
+	appendRows(renderRow(2, false))
+	appendRows(renderRow(3, false))
 	lines = append(lines, "")
 
 	// Group: DEDUPLICATION
 	lines = append(lines, renderSectionDivider("DEDUPLICATION", contentWidth))
-	lines = append(lines, renderRow(4, false)) // Deduplicate
-	lines = append(lines, renderRow(5, true))  // Bloom size (nested)
+	appendRows(renderRow(4, false))
+	appendRows(renderRow(5, true))
 	lines = append(lines, "")
 
 	// Output preview + rules summary
-	sep := sDimmer.Render(strings.Repeat("─", contentWidth))
-	lines = append(lines, sep)
+	lines = append(lines, sDimmer.Render("  "+strings.Repeat("─", contentWidth-2)))
 	outputName := f.buildOutputName(f.fileName)
 	lines = append(lines, sDim.Render("  Output  ")+sValue.Render(outputName))
 
@@ -531,31 +545,32 @@ func (f filterModel) View(width, maxHeight int) string {
 	if len(rules) > 0 {
 		lines = append(lines, sDim.Render("  Rules   ")+sSuccess.Render(strings.Join(rules, ", ")))
 	} else {
-		lines = append(lines, sWarning.Render("  Rules   none selected"))
+		lines = append(lines, sWarning.Render("  Rules   ")+sDimmer.Render("none — enable at least one filter"))
 	}
 	lines = append(lines, "")
 
-	// Start button — styled as a real button.
+	// Start button — MarginLeft keeps all three border lines aligned.
 	btnFocused := f.cursor == len(f.options) && !f.inputing
-	var btnStyle lipgloss.Style
-	var btnText string
+	var btn string
 	if btnFocused {
-		btnStyle = lipgloss.NewStyle().
+		btn = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorCyan).
 			Foreground(colorWhite).
 			Bold(true).
-			Padding(0, 3)
-		btnText = "▶   Start Processing"
+			Padding(0, 4).
+			MarginLeft(2).
+			Render("▶   Start Processing")
 	} else {
-		btnStyle = lipgloss.NewStyle().
+		btn = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorBorder).
 			Foreground(colorGray).
-			Padding(0, 3)
-		btnText = "▶   Start Processing"
+			Padding(0, 4).
+			MarginLeft(2).
+			Render("▶   Start Processing")
 	}
-	lines = append(lines, "  "+btnStyle.Render(btnText))
+	lines = append(lines, btn)
 
 	// Validation error
 	if f.validationErr != "" {
